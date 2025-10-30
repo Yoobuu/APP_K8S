@@ -221,15 +221,25 @@ function normalizeHyperV(vm) {
     })
     .filter((disk) => disk && disk.text)
 
+  const isPoweredOn = powerState === 'POWERED_ON'
+  const cpuUsageRaw = toNumber(vm.CPU_UsagePct)
+  const cpuUsagePct = isPoweredOn ? cpuUsageRaw : (cpuUsageRaw && cpuUsageRaw > 0 ? cpuUsageRaw : null)
+  const ramDemandRaw = toNumber(vm.RAM_Demand_MiB)
+  const ramUsageRaw = toNumber(vm.RAM_UsagePct)
+  const ramDemandMib = isPoweredOn ? ramDemandRaw : null
+  const ramUsagePct = isPoweredOn ? ramUsageRaw : (ramUsageRaw && ramUsageRaw > 0 ? ramUsageRaw : null)
+  const generation = toNumber(vm.CompatHW?.Generation)
+  const bootType = generation === 2 ? 'UEFI' : generation === 1 ? 'BIOS' : null
+
   return {
     id: identifier,
     name,
     power_state: powerState,
     cpu_count: toNumber(vm.CPU ?? vm.vCPU),
-    cpu_usage_pct: toNumber(vm.CPU_UsagePct),
+    cpu_usage_pct: cpuUsagePct,
     memory_size_MiB: toNumber(vm.RAM_MiB),
-    ram_demand_mib: toNumber(vm.RAM_Demand_MiB),
-    ram_usage_pct: toNumber(vm.RAM_UsagePct),
+    ram_demand_mib: ramDemandMib,
+    ram_usage_pct: ramUsagePct,
     environment: mapEnvironment(vm.Ambiente),
     guest_os: vm.SO ?? vm.OS ?? null,
     host,
@@ -238,7 +248,8 @@ function normalizeHyperV(vm) {
     networks,
     compatibility_code: vm.CompatHW?.Version ?? null,
     compatibility_human: vm.CompatHW?.Version ? `VersiA3n ${vm.CompatHW.Version}` : null,
-    compat_generation: toNumber(vm.CompatHW?.Generation),
+    compat_generation: generation,
+    boot_type: bootType,
     ip_addresses: ipList,
     disks,
     nics: Array.isArray(vm.NICs) ? vm.NICs.map((nic) => (nic == null ? '' : String(nic))) : [],
@@ -319,6 +330,13 @@ function normalizeVMware(vm) {
                 AllocatedPct: pctStr.replace(',', '.'),
               }
             }
+            const simple = /([\d.,]+)\s*(Gi?B|GB)/i.exec(disk)
+            if (simple) {
+              const [, sizeStr] = simple
+              return {
+                SizeGiB: sizeStr.replace(',', '.'),
+              }
+            }
             return null
           }
           return disk
@@ -332,6 +350,8 @@ function normalizeVMware(vm) {
           return {
             text,
             pct: pct != null && Number.isFinite(Number(pct)) ? Number(pct) : null,
+            allocatedGiB: disk.allocatedGiB ?? null,
+            sizeGiB: disk.sizeGiB ?? null,
           }
         })
         .filter((entry) => entry && entry.text)
@@ -354,7 +374,8 @@ function normalizeVMware(vm) {
     networks,
     compatibility_code: vm.compatibility_code ?? null,
     compatibility_human: vm.compatibility_human,
-    compat_generation: vm.compat_generation ?? null,
+    compat_generation: vm.compat_generation ?? vm.boot_type ?? null,
+    boot_type: vm.boot_type ?? null,
     ip_addresses: ipAddresses,
     disks,
     nics: Array.isArray(vm.nics) ? vm.nics.map((nic) => (nic == null ? '' : String(nic))) : [],

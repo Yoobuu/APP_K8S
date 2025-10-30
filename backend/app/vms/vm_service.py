@@ -5,8 +5,9 @@ from __future__ import annotations
 import logging
 import os
 import ssl
+from dataclasses import dataclass
 from threading import Lock
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional
 
 import requests
 import urllib3
@@ -32,6 +33,14 @@ COMPAT_MAP = {
     "VMX_21": "ESXi 8.0 U2 and later (VM version 21)",
 }
 
+
+@dataclass(frozen=True)
+class PlacementInfo:
+    host: str
+    cluster: str
+    cpu_usage_pct: Optional[float] = None
+    ram_demand_mib: Optional[int] = None
+    ram_usage_pct: Optional[float] = None
 
 class ThreadSafeTTLCache:
     """Wrap TTLCache with a lock to make cache operations thread-safe."""
@@ -71,7 +80,7 @@ identity_cache = ThreadSafeTTLCache(maxsize=1000, ttl=300)  # guest identity
 network_cache = ThreadSafeTTLCache(maxsize=2000, ttl=300)   # nombres de red individuales
 net_list_cache = ThreadSafeTTLCache(maxsize=1, ttl=300)     # mapeo completo de redes
 host_cache = ThreadSafeTTLCache(maxsize=200, ttl=300)       # nombres de host
-placement_cache = ThreadSafeTTLCache(maxsize=2000, ttl=300)  # host y cluster (SOAP)
+placement_cache = ThreadSafeTTLCache(maxsize=2000, ttl=300)  # host/cluster + quickstats (SOAP)
 
 # ───────────────────────────────────────────────────────────────────────
 # Utilidades de configuración / estado
@@ -140,9 +149,9 @@ def _soap_connect():
     return si, si.RetrieveContent()
 
 
-def _build_placement_map() -> Dict[str, Tuple[str, str]]:
-    """Load host/cluster information for all VMs in a single SOAP pass."""
-    results: Dict[str, Tuple[str, str]] = {}
+def _build_placement_map() -> Dict[str, PlacementInfo]:
+    """Load host/cluster and quickstat information for all VMs in a single SOAP pass."""
+    results: Dict[str, PlacementInfo] = {}
     try:
         si, content = _soap_connect()
     except Exception as exc:  # pragma: no cover - defensive
@@ -161,7 +170,44 @@ def _build_placement_map() -> Dict[str, Tuple[str, str]]:
                 host_name = host_obj.name
             if cluster_obj and getattr(cluster_obj, "name", None):
                 cluster_name = cluster_obj.name
-            results[vm._moId] = (host_name, cluster_name)
+
+            cpu_usage_pct: Optional[float] = None
+            ram_demand_mib: Optional[int] = None
+            ram_usage_pct: Optional[float] = None
+
+            try:
+                summary = getattr(vm, "summary", None)
+                runtime_info = getattr(summary, "runtime", None) if summary else None
+                config_info = getattr(summary, "config", None) if summary else None
+                quick_stats = getattr(summary, "quickStats", None) if summary else None
+
+                if quick_stats:
+                    guest_mem = getattr(quick_stats, "guestMemoryUsage", None)
+                    if isinstance(guest_mem, (int, float)):
+                        ram_demand_mib = int(guest_mem)
+
+                    total_mem = getattr(config_info, "memorySizeMB", None) if config_info else None
+                    if isinstance(guest_mem, (int, float)) and isinstance(total_mem, (int, float)) and total_mem > 0:
+                        ram_usage_pct = round((float(guest_mem) / float(total_mem)) * 100.0, 2)
+
+                    cpu_usage_mhz = getattr(quick_stats, "overallCpuUsage", None)
+                    max_cpu_mhz = getattr(runtime_info, "maxCpuUsage", None) if runtime_info else None
+                    if (
+                        isinstance(cpu_usage_mhz, (int, float))
+                        and isinstance(max_cpu_mhz, (int, float))
+                        and max_cpu_mhz > 0
+                    ):
+                        cpu_usage_pct = round((float(cpu_usage_mhz) / float(max_cpu_mhz)) * 100.0, 2)
+            except Exception:  # pragma: no cover - defensive
+                logger.debug("Unable to compute quickstats for VM %s", getattr(vm, "_moId", "?"), exc_info=True)
+
+            results[vm._moId] = PlacementInfo(
+                host=host_name,
+                cluster=cluster_name,
+                cpu_usage_pct=cpu_usage_pct,
+                ram_demand_mib=ram_demand_mib,
+                ram_usage_pct=ram_usage_pct,
+            )
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception("Failed to build placement view")
     finally:
@@ -178,19 +224,38 @@ def _build_placement_map() -> Dict[str, Tuple[str, str]]:
     return results
 
 
-def get_host_cluster_soap(vm_id: str) -> Tuple[str, str]:
+def _normalize_placement(value) -> PlacementInfo:
+    if isinstance(value, PlacementInfo):
+        return value
+    if isinstance(value, tuple) and len(value) >= 2:
+        host, cluster = value[0], value[1]
+        return PlacementInfo(host=host, cluster=cluster)
+    if isinstance(value, dict):
+        return PlacementInfo(
+            host=value.get("host", "<sin datos host>"),
+            cluster=value.get("cluster", "<sin datos cluster>"),
+            cpu_usage_pct=value.get("cpu_usage_pct"),
+            ram_demand_mib=value.get("ram_demand_mib"),
+            ram_usage_pct=value.get("ram_usage_pct"),
+        )
+    return PlacementInfo("<sin datos host>", "<sin datos cluster>")
+
+
+def get_host_cluster_soap(vm_id: str) -> PlacementInfo:
     """
-    Obtiene el nombre del host y cluster que hospedan la VM.
+    Obtiene host/cluster y quickstats básicos para la VM solicitada.
     Utiliza pyVmomi (SOAP) y cache para mejorar rendimiento.
     """
-    if vm_id in placement_cache:
-        return placement_cache[vm_id]
+    cached = placement_cache.get(vm_id)
+    if cached is not None:
+        return _normalize_placement(cached)
 
     placement_map = _build_placement_map()
     for key, value in placement_map.items():
         placement_cache[key] = value
 
-    return placement_cache.get(vm_id, ("<sin datos host>", "<sin datos cluster>"))
+    cached = placement_cache.get(vm_id)
+    return _normalize_placement(cached)
 
 
 # ───────────────────────────────────────────────────────────────────────
@@ -329,7 +394,11 @@ def _extract_disk_sizes(disks_payload: Iterable[dict]) -> List[str]:
     for disk in disks_payload:
         capacity = disk.get("value", {}).get("capacity")
         if isinstance(capacity, int):
-            disk_sizes.append(f"{capacity // (1024**3)} GB")
+            gib = capacity / (1024 ** 3)
+            if gib.is_integer():
+                disk_sizes.append(f"{int(gib)} GiB")
+            else:
+                disk_sizes.append(f"{gib:.2f} GiB")
     return disk_sizes
 
 
@@ -381,12 +450,38 @@ def _resolve_networks(
     return networks or ["<sin datos>"]
 
 
+def _normalize_boot_type(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    upper = str(value).strip().upper()
+    if not upper:
+        return None
+    if upper in {"EFI", "UEFI"}:
+        return "UEFI"
+    if upper in {"BIOS", "LEGACY", "LEGACY_BIOS"}:
+        return "BIOS"
+    return upper
+
+
+def _infer_generation_from_boot(boot_type: Optional[str]) -> Optional[str]:
+    if not boot_type:
+        return None
+    upper = str(boot_type).strip().upper()
+    if not upper:
+        return None
+    if upper == "UEFI":
+        return "2"
+    if upper == "BIOS":
+        return "1"
+    return None
+
+
 # ───────────────────────────────────────────────────────────────────────
 # Servicios públicos
 # ───────────────────────────────────────────────────────────────────────
 
 
-def get_vms() -> List[VMBase]:
+def get_vms(*, refresh: bool = False) -> List[VMBase]:
     """
     Recupera y construye la lista de máquinas virtuales:
       1. Autentica y obtiene token de sesión.
@@ -399,7 +494,9 @@ def get_vms() -> List[VMBase]:
          - Resuelve nombres de redes primarias y fallback.
       5. Cachea el resultado completo.
     """
-    if "vms" in vm_cache:
+    if refresh:
+        vm_cache.clear()
+    elif "vms" in vm_cache:
         return vm_cache["vms"]
 
     token = get_session_token()
@@ -440,7 +537,25 @@ def get_vms() -> List[VMBase]:
         compat_code = hardware_data.get("version", "<sin datos>")
         compat_human = COMPAT_MAP.get(compat_code, compat_code)
 
-        host_name, cluster_name = get_host_cluster_soap(vm_id)
+        boot_type: Optional[str] = None
+        compat_generation: Optional[str] = None
+        try:
+            boot_resp = requests.get(
+                _network_endpoint(f"/rest/vcenter/vm/{vm_id}/hardware/boot"),
+                headers=headers,
+                verify=False,
+                timeout=5,
+            )
+            if boot_resp.status_code == 200:
+                boot_value = boot_resp.json().get("value", {})
+                boot_type = _normalize_boot_type(boot_value.get("type"))
+                compat_generation = _infer_generation_from_boot(boot_type)
+        except Exception as exc:  # pragma: no cover - defensivo
+            logger.debug("VM %s: boot info fetch failed → %s", vm_id, exc)
+
+        placement = get_host_cluster_soap(vm_id)
+        host_name = placement.host
+        cluster_name = placement.cluster
 
         ident = fetch_guest_identity(vm_id, headers)
         ips = _extract_ip_list(ident)
@@ -467,6 +582,11 @@ def get_vms() -> List[VMBase]:
                 ip_addresses=ips,
                 disks=disks,
                 nics=nics,
+                cpu_usage_pct=placement.cpu_usage_pct,
+                ram_demand_mib=placement.ram_demand_mib,
+                ram_usage_pct=placement.ram_usage_pct,
+                compat_generation=compat_generation or boot_type,
+                boot_type=boot_type,
             )
         )
 
@@ -523,6 +643,21 @@ def get_vm_detail(vm_id: str) -> VMDetail:
 
     compat_code = hardware.get("version", "<sin datos>")
     compat_human = COMPAT_MAP.get(compat_code, compat_code)
+    boot_type: Optional[str] = None
+    compat_generation: Optional[str] = None
+    try:
+        boot_resp = requests.get(
+            _network_endpoint(f"/rest/vcenter/vm/{vm_id}/hardware/boot"),
+            headers=headers,
+            verify=False,
+            timeout=5,
+        )
+        if boot_resp.status_code == 200:
+            boot_value = boot_resp.json().get("value", {})
+            boot_type = _normalize_boot_type(boot_value.get("type"))
+            compat_generation = _infer_generation_from_boot(boot_type)
+    except Exception as exc:  # pragma: no cover - defensivo
+        logger.debug("VM %s detalle: boot info fetch failed → %s", vm_id, exc)
 
     name = summary.get("name", vm_id)
     env = infer_environment(name)
@@ -534,7 +669,9 @@ def get_vm_detail(vm_id: str) -> VMDetail:
     mem_c = mem.get("size_MiB", 0) if isinstance(mem, dict) else summary.get("memory_size_MiB", 0)
 
     net_map = load_network_map(headers)
-    host_name, cluster_name = get_host_cluster_soap(vm_id)
+    placement = get_host_cluster_soap(vm_id)
+    host_name = placement.host
+    cluster_name = placement.cluster
 
     disks = _extract_disk_sizes(summary.get("disks", []))
     nics = _extract_nic_labels(summary.get("nics", []))
@@ -564,4 +701,9 @@ def get_vm_detail(vm_id: str) -> VMDetail:
         ip_addresses=ips,
         disks=disks,
         nics=nics,
+        cpu_usage_pct=placement.cpu_usage_pct,
+        ram_demand_mib=placement.ram_demand_mib,
+        ram_usage_pct=placement.ram_usage_pct,
+        compat_generation=compat_generation or boot_type,
+        boot_type=boot_type,
     )

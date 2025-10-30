@@ -1,3 +1,11 @@
+# === PYTHON VIRTUAL ENVIRONMENT ===
+venv/
+env/
+ENV/
+*.pyc
+*.pyo
+*.pyd
+
 # === LOGS ===
 logs/
 *.log

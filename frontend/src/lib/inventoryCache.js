@@ -1,7 +1,7 @@
 const DEFAULT_TTL_MS = (() => {
   const raw = import.meta.env?.VITE_INVENTORY_TTL_MS
   const parsed = Number(raw)
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 60000
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 5 * 60 * 1000
 })()
 
 const PREFIX = 'inv-cache:'

@@ -12,6 +12,7 @@ class VMBase(BaseModel):
       • Compatibilidad de la versión de la VM (código y descripción).
       • Conectividad de red (redes, direcciones IP, adaptadores de red).
       • Almacenamiento (lista de discos con su capacidad en GB).
+      • Indicadores operativos básicos (uso CPU/Memoria) cuando estén disponibles.
     """
     id: str
     name: str
@@ -28,6 +29,11 @@ class VMBase(BaseModel):
     ip_addresses: List[str] = []
     disks:        List[str] = []
     nics:         List[str] = []
+    cpu_usage_pct: Optional[float] = None
+    ram_demand_mib: Optional[int] = None
+    ram_usage_pct: Optional[float] = None
+    compat_generation: Optional[str] = None
+    boot_type: Optional[str] = None
 
 # —————— Esquema para detalles extendidos ——————
 class VMDetail(VMBase):

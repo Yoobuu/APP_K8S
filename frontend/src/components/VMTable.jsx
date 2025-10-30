@@ -7,9 +7,12 @@ import VMEmptyState from './VMTable/VMEmptyState'
 import VMDetailModal from './VMDetailModal'
 import { columnsVMware } from './inventoryColumns.jsx'
 import { exportInventoryCsv } from '../lib/exportCsv'
+import { normalizeVMware } from '../lib/normalize'
+
+const AUTO_REFRESH_MS = 5 * 60 * 1000
 
 export default function VMTable() {
-  const { state, actions } = useInventoryState({ provider: 'vmware' })
+  const { state, actions } = useInventoryState({ provider: 'vmware', autoRefreshMs: AUTO_REFRESH_MS })
   const {
     vms,
     loading,
@@ -18,6 +21,7 @@ export default function VMTable() {
     groupByOption,
     globalSearch,
     selectedVm,
+    selectedRecord,
     collapsedGroups,
     resumen,
     uniqueEnvironments,
@@ -30,12 +34,15 @@ export default function VMTable() {
     groups,
     sortBy,
     hasFilters,
+    refreshing,
+    lastFetchTs,
   } = state
   const {
     setFilter,
     setGroupByOption,
     setGlobalSearch,
     setSelectedVm,
+    setSelectedRecord,
     clearFilters,
     toggleGroup,
     fetchVm,
@@ -83,20 +90,26 @@ export default function VMTable() {
   }, [processed])
 
   const handleRefresh = useCallback(() => {
-    fetchVm(true)
+    fetchVm({ refresh: true, showLoading: false })
   }, [fetchVm])
 
   const handleRowClick = useCallback(
     (row) => {
-      if (!row || !row.id) return
-      setSelectedVm(row.id)
+      if (!row) return
+      const normalized = row.provider ? row : { ...normalizeVMware(row), __raw: row }
+      if (!normalized.id) return
+      setSelectedVm(normalized.id)
+      setSelectedRecord(normalized)
     },
-    [setSelectedVm]
+    [setSelectedRecord, setSelectedVm]
   )
 
   const handleCloseModal = useCallback(
-    () => setSelectedVm(null),
-    [setSelectedVm]
+    () => {
+      setSelectedVm(null)
+      setSelectedRecord(null)
+    },
+    [setSelectedRecord, setSelectedVm]
   )
 
   const handleDetailAction = useCallback(
@@ -108,8 +121,9 @@ export default function VMTable() {
           : ''
       handlePowerChange(selectedVm, newState)
       setSelectedVm(null)
+      setSelectedRecord(null)
     },
-    [handlePowerChange, selectedVm, setSelectedVm]
+    [handlePowerChange, selectedVm, setSelectedRecord, setSelectedVm]
   )
 
   let emptyStateType = null
@@ -126,21 +140,36 @@ export default function VMTable() {
           <h2 className="text-3xl font-bold text-gray-800 mb-2">Inventario de VMs</h2>
           <div className="h-1 w-32 bg-[#5da345] rounded-full"></div>
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={handleRefresh}
-            disabled={loading}
-            className="bg-white border border-blue-300 text-blue-700 font-medium py-2 px-4 rounded-lg shadow-sm hover:bg-blue-50 transition disabled:opacity-60 disabled:cursor-not-allowed"
-          >
-            Actualizar inventario
-          </button>
-          <button
-            onClick={handleExport}
-            disabled={!processed.length}
-            className="bg-[#5da345] text-white font-medium py-2 px-4 rounded-lg shadow hover:bg-[#4c8c38] transition disabled:opacity-60 disabled:cursor-not-allowed"
-          >
-            Exportar CSV
-          </button>
+        <div className="flex flex-col items-end gap-2">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleRefresh}
+              disabled={loading}
+              className="bg-white border border-blue-300 text-blue-700 font-medium py-2 px-4 rounded-lg shadow-sm hover:bg-blue-50 transition disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              Actualizar inventario
+            </button>
+            <button
+              onClick={handleExport}
+              disabled={!processed.length}
+              className="bg-[#5da345] text-white font-medium py-2 px-4 rounded-lg shadow hover:bg-[#4c8c38] transition disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              Exportar CSV
+            </button>
+          </div>
+          {(refreshing || lastFetchTs) && (
+            <div className="text-xs text-gray-500 text-right">
+              {refreshing && (
+                <span className="mr-2 text-blue-600 animate-pulse">Actualizando&hellip;</span>
+              )}
+              {lastFetchTs && (
+                <span>
+                  Ultima actualizacion{' '}
+                  {new Date(lastFetchTs).toLocaleString()}
+                </span>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -232,6 +261,7 @@ export default function VMTable() {
       {selectedVm && (
         <VMDetailModal
           vmId={selectedVm}
+          record={selectedRecord}
           onClose={handleCloseModal}
           onAction={handleDetailAction}
         />

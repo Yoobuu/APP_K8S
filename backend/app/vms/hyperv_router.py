@@ -8,9 +8,17 @@ from typing import List, Optional
 
 from cachetools import TTLCache
 from fastapi import APIRouter, Depends, HTTPException, Query, Path as PathParam
+from sqlmodel import Session
 
+from app.audit.service import log_audit
 from app.auth.user_model import User
-from app.dependencies import get_current_user, require_admin
+from app.db import get_session
+from app.dependencies import (
+    AuditRequestContext,
+    get_current_user,
+    get_request_audit_context,
+    require_admin,
+)
 from app.providers.hyperv.remote import RemoteCreds, run_power_action
 from app.providers.hyperv.schema import VMRecord
 from app.vms.hyperv_service import collect_hyperv_inventory_for_host

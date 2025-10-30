@@ -21,12 +21,20 @@ export default function Navbar() {
             ← Inventarios
           </Link>
           {isSuperadmin && (
-            <Link
-              to="/users"
-              className="rounded-xl bg-emerald-600/90 px-4 py-2 text-sm font-medium shadow transition hover:bg-emerald-500/90"
-            >
-              Usuarios
-            </Link>
+            <>
+              <Link
+                to="/users"
+                className="rounded-xl bg-emerald-600/90 px-4 py-2 text-sm font-medium shadow transition hover:bg-emerald-500/90"
+              >
+                Usuarios
+              </Link>
+              <Link
+                to="/audit"
+                className="rounded-xl bg-purple-600/90 px-4 py-2 text-sm font-medium shadow transition hover:bg-purple-500/90"
+              >
+                Auditoría
+              </Link>
+            </>
           )}
         </div>
 

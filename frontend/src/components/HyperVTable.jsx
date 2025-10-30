@@ -71,6 +71,7 @@ export default function HyperVTable({
     summaryBuilder,
     provider: 'hyperv',
     cacheTtlMs: 5 * 60 * 1000,
+    autoRefreshMs: 5 * 60 * 1000,
   })
 
   const {

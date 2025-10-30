@@ -24,7 +24,7 @@ function classifyFromString(str) {
     const first = token.charAt(0)
     if (first === 'S') return 'sandbox'
     if (first === 'T') return 'test'
-    if (first === 'P') return 'producción'
+    if (first === 'P') return 'producciÃ³n'
     if (first === 'D') return 'desarrollo'
   }
   return null
@@ -536,7 +536,7 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
   const content = (
     <AnimatePresence>
       <Motion.div
-        className="fixed inset-0 bg-black bg-opacity-50 backdrop-blur-sm flex items-center justify-center z-[9999]"
+        className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm px-4 py-8"
         onClick={onClose}
         variants={backdropVariants}
         initial="hidden"
@@ -549,125 +549,133 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
           role="dialog"
           aria-modal="true"
           aria-labelledby="hyperv-detail-title"
-          className="bg-white text-gray-800 p-6 rounded-2xl shadow-xl max-w-xl w-full relative focus:outline-none"
+          className="relative flex h-full max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white text-gray-800 shadow-xl focus:outline-none"
           onClick={(event) => event.stopPropagation()}
           variants={modalVariants}
           initial="hidden"
           animate="visible"
           exit="exit"
         >
-          <button
-            onClick={onClose}
-            aria-label="Cerrar detalle Hyper-V"
-            className="absolute top-4 right-4 text-gray-600 hover:text-gray-900 transition text-xl"
-          >
-            ×
-          </button>
-          <h3 id="hyperv-detail-title" className="text-2xl font-semibold mb-4">
-            Detalle VM {baseVm.Name || baseVm.name}
-          </h3>
-          {successMsg && (
-            <div className="bg-green-100 text-green-800 p-3 rounded mb-4">
-              {successMsg}
-            </div>
-          )}
-          {error && (
-            <div className="bg-red-100 text-red-700 p-3 rounded mb-4">
-              {error}
-            </div>
-          )}
-          {loading && (
-            <div className="space-y-3 mb-6 px-4">
-              {SKELETON_WIDTHS.map((widthClass, index) => (
-                <div
-                  key={index}
-                  className={'h-4 bg-gray-200 rounded animate-pulse ' + widthClass}
-                />
-              ))}
-            </div>
-          )}
-          {pending && (
-            <div className="bg-gray-100 border border-gray-300 rounded p-4 mb-4">
-              <p className="text-gray-800">
-                �Seguro que deseas <strong>{pending.text.toLowerCase()}</strong> la VM {baseVm.Name || baseVm.name}?
-              </p>
-              <div className="flex justify-end gap-2 mt-3">
-                <button
-                  className="bg-green-500 text-white px-3 py-1 rounded hover:bg-green-600"
-                  onClick={async () => {
-                    // Integración real con backend: /hyperv/vms/{hvhost}/{vmname}/power/{action}
-                    // Ejecuta acciones de energía reales vía WinRM.
-                    const hvhost = baseVm.HVHost || baseVm.host;
-                    const vmname = baseVm.Name || baseVm.name;
-                    const action = pending.apiPath; // "start" | "stop" | "reset"
-                    if (!hvhost || !vmname) {
-                      setError("Falta HVHost o VMName");
-                      return;
-                    }
-                    if (powerDisabled) {
-                      alert('Acceso denegado (403).')
-                      setPending(null)
-                      return
-                    }
-                    setActionLoading(pending.apiPath);
-                    setError("");
-                    let ok = false;
-                    try {
-                      const resp = await api.post(
-                        `/hyperv/vms/${hvhost}/${vmname}/power/${action}`
-                      );
-                      ok = true;
-                      setSuccessMsg(
-                        resp?.data?.message ||
-                        `Acción ${pending.text.toLowerCase()} aceptada para ${vmname} en ${hvhost}.`
-                      );
-                    } catch (err) {
-                      if (err?.response?.status === 403) {
-                        alert('Acceso denegado (403).')
-                      }
-                      const apiDetail =
-                        err?.response?.data?.detail ||
-                        err?.message ||
-                        'Error al ejecutar la acción solicitada.'
-                      setError(apiDetail)
-                    } finally {
-                      setActionLoading(null);
-                      setPending(null);
-                    }
-                  }}
-                >
-                  Sí
-                </button>
-                <button
-                  className="bg-gray-300 px-3 py-1 rounded hover:bg-gray-400"
-                  onClick={() => setPending(null)}
-                >
-                  No
-                </button>
+          <div className="flex items-start justify-between gap-4 border-b border-gray-200 p-6">
+            <h3 id="hyperv-detail-title" className="text-2xl font-semibold">
+              Detalle VM {baseVm.Name || baseVm.name}
+            </h3>
+            <button
+              onClick={onClose}
+              aria-label="Cerrar detalle Hyper-V"
+              className="text-xl text-gray-500 transition hover:text-gray-900"
+            >
+              ×
+            </button>
+          </div>
+
+          <div className="flex-1 overflow-y-auto p-6">
+            {successMsg && (
+              <div className="mb-4 rounded border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">
+                {successMsg}
               </div>
-            </div>
-          )}
-          {!loading && (
-            <dl className="grid grid-cols-2 gap-x-6 gap-y-2 mb-6 px-2">
-              {details.map(([label, value]) => (
-                <div key={label} className="col-span-1 flex">
-                  <dt className="font-medium text-gray-700 w-1/2">{label}:</dt>
-                  <dd className="text-gray-800 flex-1 break-words">{value ?? '\u2014'}</dd>
+            )}
+
+            {error && (
+              <div className="mb-4 rounded border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                {error}
+              </div>
+            )}
+
+            {loading && (
+              <div className="space-y-3">
+                {SKELETON_WIDTHS.map((widthClass, index) => (
+                  <div
+                    key={index}
+                    className={`h-4 rounded bg-gray-200 animate-pulse ${widthClass}`}
+                  />
+                ))}
+              </div>
+            )}
+
+            {pending && (
+              <div className="mb-4 rounded border border-gray-300 bg-gray-100 p-4">
+                <p className="text-sm text-gray-800">
+                  ¿Seguro que deseas <strong>{pending.text.toLowerCase()}</strong> la VM {baseVm.Name || baseVm.name}?
+                </p>
+                <div className="mt-3 flex justify-end gap-2">
+                  <button
+                    className="rounded bg-green-500 px-3 py-1 text-sm text-white hover:bg-green-600"
+                    onClick={async () => {
+                      const hvhost = baseVm.HVHost || baseVm.host;
+                      const vmname = baseVm.Name || baseVm.name;
+                      const action = pending.apiPath;
+                      if (!hvhost || !vmname) {
+                        setError("Falta HVHost o VMName");
+                        return;
+                      }
+                      if (powerDisabled) {
+                        alert('Acceso denegado (403).');
+                        setPending(null);
+                        return;
+                      }
+                      setActionLoading(pending.apiPath);
+                      setError("");
+                      let ok = false;
+                      try {
+                        const resp = await api.post(`/hyperv/vms/${hvhost}/${vmname}/power/${action}`);
+                        ok = true;
+                        setSuccessMsg(
+                          resp?.data?.message ||
+                            `Acción ${pending.text.toLowerCase()} aceptada para ${vmname} en ${hvhost}.`
+                        );
+                      } catch (err) {
+                        if (err?.response?.status === 403) {
+                          alert('Acceso denegado (403).');
+                        }
+                        const apiDetail =
+                          err?.response?.data?.detail ||
+                          err?.message ||
+                          'Error al ejecutar la acción solicitada.';
+                        setError(apiDetail);
+                      } finally {
+                        setActionLoading(null);
+                        setPending(null);
+                      }
+                    }}
+                  >
+                    Sí
+                  </button>
+                  <button
+                    className="rounded bg-gray-300 px-3 py-1 text-sm text-gray-800 hover:bg-gray-400"
+                    onClick={() => setPending(null)}
+                  >
+                    No
+                  </button>
                 </div>
-              ))}
-            </dl>
-          )}
-  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-    {actionButton('Encender', 'start', 'start', IoPowerSharp)}
-    {actionButton('Apagar', 'stop', 'stop', IoPowerOutline)}
-    {actionButton('Reset', 'reset', 'reset', IoRefreshSharp)}
-  </div>
-  {powerDisabled && (
-    <p className="mt-3 text-xs text-red-500">{powerDisabledMessage}</p>
-  )}
+              </div>
+            )}
+
+            {!loading && (
+              <dl className="grid grid-cols-1 gap-x-6 gap-y-3 text-sm sm:grid-cols-2">
+                {details.map(([label, value]) => (
+                  <div key={label} className="col-span-1 flex">
+                    <dt className="w-1/2 font-medium text-gray-700">{label}:</dt>
+                    <dd className="flex-1 break-words text-gray-800">{value ?? '—'}</dd>
+                  </div>
+                ))}
+              </dl>
+            )}
+
+            <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
+              {actionButton('Encender', 'start', 'start', IoPowerSharp)}
+              {actionButton('Apagar', 'stop', 'stop', IoPowerOutline)}
+              {actionButton('Reset', 'reset', 'reset', IoRefreshSharp)}
+            </div>
+
+            {powerDisabled && (
+              <p className="mt-3 text-xs text-red-500">{powerDisabledMessage}</p>
+            )}
+          </div>
         </Motion.div>
       </Motion.div>
     </AnimatePresence>
-  )
+  );
+
   return createPortal(content, document.body)
 }

@@ -45,10 +45,14 @@ export default function LoginRedesign() {
     setLoading(true);
     try {
       const res = await api.post("/auth/login", { username, password, provider });
-      const { access_token: accessToken, user } = res?.data || {};
+      const {
+        access_token: accessToken,
+        user,
+        require_password_change: requirePasswordChange,
+      } = res?.data || {};
 
       if (accessToken) {
-        login({ token: accessToken, user });
+        login({ token: accessToken, user, requirePasswordChange });
       }
 
       if (remember) {
@@ -59,7 +63,7 @@ export default function LoginRedesign() {
         localStorage.removeItem("last_username");
       }
 
-      navigate("/choose", { replace: true });
+      navigate(requirePasswordChange ? "/change-password" : "/choose", { replace: true });
     } catch (err) {
       const msg = err?.response?.data?.detail || err?.message || "Error de autenticación";
       setError(msg);

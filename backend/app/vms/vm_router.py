@@ -1,37 +1,44 @@
-# —————— Importaciones y configuración del router ——————
 import logging
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from fastapi.responses import JSONResponse
+from sqlmodel import Session
 
+from app.audit.service import log_audit
 from app.auth.user_model import User
-from app.dependencies import get_current_user, require_admin
+from app.db import get_session
+from app.dependencies import (
+    AuditRequestContext,
+    get_current_user,
+    get_request_audit_context,
+    require_admin,
+)
 from app.utils.text import normalize_text
 from app.vms.vm_models import VMBase, VMDetail
+from app.vms.vm_perf_service import get_vm_perf_summary
 from app.vms.vm_service import get_vm_detail, get_vms, power_action
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-# —————— Endpoint: Listar VMs ——————
+
 @router.get("/vms", response_model=List[VMBase])
 def list_vms(
-    name: Optional[str]        = Query(None, description="Filtrar por nombre parcial"),
+    name: Optional[str] = Query(None, description="Filtrar por nombre parcial"),
     environment: Optional[str] = Query(None, description="Filtrar por ambiente"),
-    current_user: User         = Depends(get_current_user),
+    refresh: bool = Query(False, description="Forzar refresco del inventario de VMware"),
+    current_user: User = Depends(get_current_user),
 ):
-    """
-    Lista todas las máquinas virtuales disponibles.
-    - Aplica filtros opcionales por nombre y entorno.
-    - Requiere autenticación previa.
-    - Maneja errores internos al obtener la lista de VMs.
-    """
-    logger.info("GET /api/vms requested by '%s'", current_user.username)
+    logger.info(
+        "GET /api/vms requested by '%s' (refresh=%s)",
+        current_user.username,
+        refresh,
+    )
 
     try:
-        vms = get_vms()
-    except Exception as e:
+        vms = get_vms(refresh=refresh)
+    except Exception:
         logger.exception("Error while retrieving VMs")
         raise HTTPException(status_code=500, detail="Error interno al obtener VMs")
 
@@ -46,20 +53,17 @@ def list_vms(
         ]
     return vms
 
-# —————— Endpoint: Acciones de energía sobre una VM ——————
+
 @router.post("/vms/{vm_id}/power/{action}")
 def vm_power_action(
-    vm_id: str        = Path(..., description="ID de la VM"),
-    action: str       = Path(..., description="Acción: start, stop o reset"),
+    vm_id: str = Path(..., description="ID de la VM"),
+    action: str = Path(..., description="Accion: start, stop o reset"),
     current_user: User = Depends(require_admin),
+    session: Session = Depends(get_session),
+    audit_ctx: AuditRequestContext = Depends(get_request_audit_context),
 ):
-    """
-    Ejecuta una acción de power (start, stop o reset) sobre la VM indicada.
-    - Valida que la acción sea una de las permitidas.
-    - Retorna una respuesta JSON con el resultado o un error 400 si la acción no es válida.
-    """
     if action not in {"start", "stop", "reset"}:
-        return JSONResponse(status_code=400, content={"error": "Acción no válida"})
+        return JSONResponse(status_code=400, content={"error": "Accion no valida"})
 
     logger.info(
         "Power action '%s' requested for VM '%s' by '%s'",
@@ -67,19 +71,56 @@ def vm_power_action(
         vm_id,
         current_user.username,
     )
-    return power_action(vm_id, action)
+    result = power_action(vm_id, action)
+    log_audit(
+        session,
+        actor=current_user,
+        action="vms.power_action",
+        target_type="vm",
+        target_id=vm_id,
+        meta={"action": action},
+        ip=audit_ctx.ip,
+        ua=audit_ctx.user_agent,
+        corr=audit_ctx.correlation_id,
+    )
+    session.commit()
+    return result
 
-# —————— Endpoint: Detalle de una VM ——————
+
+@router.get("/vms/{vm_id}/perf")
+def vm_perf_summary(
+    vm_id: str = Path(..., description="ID de la VM"),
+    window: int = Query(60, ge=20, le=1800, description="Ventana en segundos para recopilar metricas (20-1800)."),
+    idle_to_zero: bool = Query(
+        False,
+        description="Si es true, rellena con 0 los contadores de disco sin actividad en la ventana."
+    ),
+    by_disk: bool = Query(
+        False,
+        description="Incluye metricas por disco (instancias individuales)."
+    ),
+    current_user: User = Depends(require_admin),
+):
+    logger.debug(
+        "Fetching perf metrics for VM '%s' requested by '%s' (window=%s, idle_to_zero=%s, by_disk=%s)",
+        vm_id,
+        current_user.username,
+        window,
+        idle_to_zero,
+        by_disk,
+    )
+    return get_vm_perf_summary(
+        vm_id,
+        window_seconds=window,
+        idle_to_zero=idle_to_zero,
+        by_disk=by_disk,
+    )
+
 @router.get("/vms/{vm_id}", response_model=VMDetail)
 def vm_detail(
-    vm_id: str        = Path(..., description="ID de la VM"),
+    vm_id: str = Path(..., description="ID de la VM"),
     current_user: User = Depends(get_current_user),
 ):
-    """
-    Obtiene el detalle completo de una máquina virtual:
-    - Reemplaza guiones bajos por medios para sanitizar el ID.
-    - Devuelve todos los campos extendidos definidos en VMDetail.
-    """
     safe_id = vm_id.replace("_", "-")
     logger.debug(
         "Fetching detail for VM '%s' (normalized '%s') requested by '%s'",

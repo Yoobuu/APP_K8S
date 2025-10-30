@@ -52,6 +52,7 @@ def main() -> None:
             hashed_password=hashed_pwd,
             role=UserRole.SUPERADMIN,
         )
+        user.mark_password_changed()
         session.add(user)
         session.commit()
 

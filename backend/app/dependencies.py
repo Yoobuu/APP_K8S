@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from fastapi import Depends, HTTPException, status
+from dataclasses import dataclass
+from typing import Optional
+
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import ExpiredSignatureError, JWTError
 from sqlmodel import Session, select
@@ -80,3 +83,26 @@ def require_superadmin(current_user: User = Depends(get_current_user)) -> User:
             detail="Permisos insuficientes",
         )
     return current_user
+
+
+@dataclass
+class AuditRequestContext:
+    ip: Optional[str]
+    user_agent: Optional[str]
+    correlation_id: Optional[str]
+
+
+def get_request_audit_context(request: Request) -> AuditRequestContext:
+    """
+    Extrae metadatos de la petición necesarios para el registro de auditoría.
+    """
+    forwarded_for = request.headers.get("X-Forwarded-For")
+    if forwarded_for:
+        ip = forwarded_for.split(",")[0].strip()
+    else:
+        ip = request.client.host if request.client else None
+
+    user_agent = request.headers.get("User-Agent")
+    correlation_id = getattr(request.state, "correlation_id", None)
+
+    return AuditRequestContext(ip=ip, user_agent=user_agent, correlation_id=correlation_id)

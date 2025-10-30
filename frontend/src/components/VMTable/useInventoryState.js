@@ -60,15 +60,39 @@ const GROUPERS = {
   SO: (vm) => vm.guest_os || 'Sin SO',
 }
 
-const defaultFetch = async ({ provider } = {}) => {
+const parseSortableNumber = (value) => {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null
+  }
+  if (typeof value === 'string') {
+    const cleaned = value.trim().replace(/,/g, '.').replace(/%$/, '')
+    if (!cleaned) return null
+    const parsed = Number(cleaned)
+    return Number.isFinite(parsed) ? parsed : null
+  }
+  return null
+}
+
+const compareNullLast = (a, b, compare) => {
+  const isEmpty = (input) => input == null || input === ''
+  const emptyA = isEmpty(a)
+  const emptyB = isEmpty(b)
+  if (emptyA && emptyB) return 0
+  if (emptyA) return 1
+  if (emptyB) return -1
+  return compare(a, b)
+}
+
+const defaultFetch = async ({ provider, refresh } = {}) => {
+  const params = refresh ? { refresh: true } : undefined
   if (provider === 'hyperv') {
-    const { data } = await api.get('/hyperv/vms/batch')
+    const { data } = await api.get('/hyperv/vms/batch', { params })
     if (data && data.results && typeof data.results === 'object') {
       return Object.values(data.results).flat()
     }
     return []
   } else {
-    const { data } = await api.get('/vms')
+    const { data } = await api.get('/vms', { params })
     return Array.isArray(data) ? data : data.results || []
   }
 }
@@ -128,6 +152,7 @@ export function useInventoryState(options = {}) {
     initialGroup = 'none',
     provider = 'vmware',
     cacheTtlMs,
+    autoRefreshMs,
   } = options
 
   const providerKey = provider || 'vmware'
@@ -225,10 +250,31 @@ export function useInventoryState(options = {}) {
       } else if (typeof options === 'object' && options !== null) {
         normalizedOptions = options
       }
-      await fetchData({ showLoading: true, ...normalizedOptions })
+      const { showLoading = true, ...rest } = normalizedOptions
+      await fetchData({ showLoading, ...rest })
     },
     [fetchData]
   )
+
+  useEffect(() => {
+    const refreshInterval =
+      Number.isFinite(autoRefreshMs) && autoRefreshMs > 0 ? autoRefreshMs : null
+    if (!refreshInterval) return undefined
+
+    let intervalId
+
+    const tick = () => {
+      if (typeof document !== 'undefined' && document.hidden) {
+        return
+      }
+      fetchVm({ refresh: true, showLoading: false })
+    }
+
+    intervalId = setInterval(tick, refreshInterval)
+    return () => {
+      if (intervalId) clearInterval(intervalId)
+    }
+  }, [autoRefreshMs, fetchVm])
 
   useEffect(() => {
     console.log('[useEffect mount] providerKey =', providerKey)
@@ -370,10 +416,24 @@ export function useInventoryState(options = {}) {
       const { key, asc } = sortBy
       const va = a[key]
       const vb = b[key]
-      if (va == null || vb == null) return 0
-      if (va < vb) return asc ? -1 : 1
-      if (va > vb) return asc ? 1 : -1
-      return 0
+      const numA = parseSortableNumber(va)
+      const numB = parseSortableNumber(vb)
+
+      if (numA != null || numB != null) {
+        return compareNullLast(numA, numB, (left, right) => {
+          if (left === right) return 0
+          const lessThan = left < right
+          if (asc) return lessThan ? -1 : 1
+          return lessThan ? 1 : -1
+        })
+      }
+
+      const textA = va != null ? String(va).trim().toLowerCase() : ''
+      const textB = vb != null ? String(vb).trim().toLowerCase() : ''
+      return compareNullLast(textA, textB, (left, right) => {
+        const comparison = left.localeCompare(right, 'es', { sensitivity: 'base', numeric: true })
+        return asc ? comparison : -comparison
+      })
     })
 
     return arr

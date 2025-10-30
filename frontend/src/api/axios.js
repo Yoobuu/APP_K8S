@@ -5,7 +5,7 @@ import { jwtDecode } from "jwt-decode";
 // —————— Instancia base de Axios ——————
 const api = axios.create({
   // URL base configurada desde variable de entorno o localhost por defecto
-  baseURL: import.meta.env.VITE_API_URL || "http://localhost:8000/api",
+  baseURL: import.meta.env.VITE_API_URL || "/api",
 });
 
 // —————— Interceptor de petición: inyecta y valida el token JWT ——————

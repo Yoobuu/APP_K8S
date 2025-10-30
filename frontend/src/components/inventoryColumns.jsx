@@ -37,6 +37,41 @@ const formatGiB = (value) => {
 const joinList = (list) =>
   Array.isArray(list) && list.length ? list.join(', ') : '\u2014'
 
+const normalizeBootLabel = (value) => {
+  const upper = String(value).trim().toUpperCase()
+  if (!upper) return '\u2014'
+  if (upper.includes('EFI')) return 'UEFI'
+  if (upper.includes('BIOS')) return 'BIOS'
+  return value
+}
+
+const renderGeneration = (vm) => {
+  const raw = vm.compat_generation ?? vm.boot_type
+  if (raw == null || raw === '') {
+    return <span className="text-sm text-gray-700">{'\u2014'}</span>
+  }
+
+  const numeric = Number(raw)
+  if (Number.isFinite(numeric)) {
+    return <span className="text-sm text-gray-700">{`Gen ${numeric}`}</span>
+  }
+
+  const textValue = String(raw).trim()
+  if (!textValue) {
+    return <span className="text-sm text-gray-700">{'\u2014'}</span>
+  }
+
+  const normalized = normalizeBootLabel(textValue)
+  const upper = normalized.toUpperCase()
+  if (upper === 'UEFI') {
+    return <span className="text-sm text-gray-700">Gen 2</span>
+  }
+  if (upper === 'BIOS') {
+    return <span className="text-sm text-gray-700">Gen 1</span>
+  }
+  return <span className="text-sm text-gray-700">{normalized}</span>
+}
+
 const renderDisksWithBars = (disks) => {
   if (!Array.isArray(disks) || disks.length === 0) {
     return <span className="text-sm text-gray-700">{'\u2014'}</span>
@@ -265,7 +300,7 @@ const BASE_COLUMNS = [
   },
   {
     key: 'compatibility_code',
-    label: 'Compatibilidad CA3digo',
+    label: 'Compatibilidad Código',
     render: (vm) => <span className="text-sm text-gray-700">{vm.compatibility_code || '\u2014'}</span>,
   },
   {
@@ -275,8 +310,8 @@ const BASE_COLUMNS = [
   },
   {
     key: 'compat_generation',
-    label: 'Compatibilidad GeneraciA3n',
-    render: (vm) => <span className="text-sm text-gray-700">{vm.compat_generation ?? '\u2014'}</span>,
+    label: 'Firmware / Gen',
+    render: (vm) => renderGeneration(vm),
   },
   {
     key: 'ip_addresses',
@@ -295,31 +330,10 @@ const BASE_COLUMNS = [
   },
 ]
 
-const COMMON_HYPERV_KEYS = new Set([
-  'id',
-  'name',
-  'power_state',
-  'cpu_count',
-  'cpu_usage_pct',
-  'memory_size_MiB',
-  'ram_demand_mib',
-  'ram_usage_pct',
-  'environment',
-  'guest_os',
-  'host',
-  'cluster',
-  'vlans',
-  'ip_addresses',
-  'disks',
-  'compatibility_code',
-  'compatibility_human',
-  'compat_generation',
-])
+export const columnsVMware = BASE_COLUMNS.filter((column) => column.key !== 'vlans')
 
-export const columnsVMware = BASE_COLUMNS
-
-export const columnsHyperV = BASE_COLUMNS.filter((column) =>
-  COMMON_HYPERV_KEYS.has(column.key)
+export const columnsHyperV = BASE_COLUMNS.filter(
+  (column) => column.key !== 'networks' && column.key !== 'nics' && column.key !== 'compatibility_human'
 )
 
 export const INVENTORY_COLUMNS = columnsVMware
