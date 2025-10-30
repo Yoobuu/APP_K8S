@@ -1,9 +1,9 @@
-锘縤mport { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { AnimatePresence, motion as Motion } from 'framer-motion'
 import api from '../api/axios'
 import { IoPowerSharp, IoPowerOutline, IoRefreshSharp } from 'react-icons/io5'
-
+import { useAuth } from '../context/AuthContext'
 const ACTION_THEMES = {
   start: {
     base: 'bg-green-500 hover:bg-green-600 focus-visible:ring-green-300',
@@ -15,13 +15,10 @@ const ACTION_THEMES = {
     base: 'bg-yellow-500 hover:bg-yellow-600 focus-visible:ring-yellow-300',
   },
 }
-
 const SKELETON_WIDTHS = ['w-2/3', 'w-1/2', 'w-5/6', 'w-3/4', 'w-1/3', 'w-2/5']
-
 function classifyFromString(str) {
   const cleaned = String(str ?? '').trim().toUpperCase()
   if (!cleaned) return null
-
   const tokens = cleaned.split(/[-_\s]+/).filter(Boolean)
   for (const token of tokens) {
     const first = token.charAt(0)
@@ -30,10 +27,8 @@ function classifyFromString(str) {
     if (first === 'P') return 'producci贸n'
     if (first === 'D') return 'desarrollo'
   }
-
   return null
 }
-
 function inferFromVmObject(vm) {
   if (!vm) return null
   const byName = classifyFromString(vm.Name || vm.name)
@@ -44,7 +39,6 @@ function inferFromVmObject(vm) {
   if (byHost) return byHost
   return null
 }
-
 function inferFromSelectorKey(selectorKey) {
   if (!selectorKey) return null
   const [maybeName, maybeHost] = String(selectorKey).split('::')
@@ -54,7 +48,6 @@ function inferFromSelectorKey(selectorKey) {
   if (byHost) return byHost
   return null
 }
-
 function inferEnvironment({ vm, selectorKey }) {
   const fromVm = inferFromVmObject(vm)
   if (fromVm) return fromVm
@@ -62,19 +55,19 @@ function inferEnvironment({ vm, selectorKey }) {
   if (fromSelector) return fromSelector
   return 'desconocido'
 }
-
 // Nota: ya no bloqueamos por sandbox. Los botones siempre salen.
 export default function HyperVDetailModal({ record, selectorKey = '', onClose }) {
   const modalRef = useRef(null)
+  const { canManagePower } = useAuth()
+  const powerDisabled = !canManagePower
+  const powerDisabledMessage = 'No tienes permisos para controlar energia. Pide acceso a un admin.'
   const [loading] = useState(false)
   const [error, setError] = useState('')
   const [successMsg, setSuccessMsg] = useState('')
   const [actionLoading, setActionLoading] = useState(null)
   const [pending, setPending] = useState(null)
-
   const detail = null
   const baseVm = detail || record || {}
-
   // Unifica la vista de tabla y el modal para mostrar Encendida/Apagada en lugar de POWERED_ON.
   const POWER_LABELS = {
     POWERED_ON: 'Encendida',
@@ -83,10 +76,8 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
     Off: 'Apagada',
     SUSPENDED: 'Suspendida',
   }
-
   const rawPowerState = baseVm.State || baseVm.power_state
   const friendlyPowerState = POWER_LABELS[rawPowerState] || rawPowerState || '\u2014'
-
   const cpuPctRaw =
     baseVm.CPU_UsagePct ??
     baseVm.cpuUsagePct ??
@@ -99,21 +90,18 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
   const cpuPctDisplay = cpuPctRaw !== null && cpuPctRaw !== undefined
     ? `${cpuPctRaw}%`
     : '\u2014'
-
   const toGiB = (value) => {
     const parsed = Number(value)
     if (!Number.isFinite(parsed)) return null
     const gib = parsed / 1024
     return Number.isFinite(gib) ? gib : null
   }
-
   const formatGiB = (value) => {
     if (value == null || value === '' || value === '\u2014') return '\u2014'
     const gib = toGiB(value)
     if (gib == null) return '\u2014'
     return gib.toLocaleString(undefined, { maximumFractionDigits: 2 })
   }
-
   const renderPercentWithBar = (value) => {
     if (value == null || value === '') return '\u2014'
     const parsed = Number(value)
@@ -134,7 +122,6 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
       </div>
     )
   }
-
   const parsePctFromText = (text) => {
     if (typeof text !== 'string') return null
     const match = /([\d.,]+)%/.exec(text)
@@ -142,7 +129,6 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
     const value = Number(match[1].replace(',', '.'))
     return Number.isFinite(value) ? value : null
   }
-
   const normalizeDiskForDisplay = (entry) => {
     if (!entry) return null
     if (typeof entry === 'object' && ('text' in entry || 'pct' in entry)) {
@@ -157,21 +143,18 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
         pct: pctValue,
       }
     }
-
     if (typeof entry === 'string') {
       return {
         text: entry,
         pct: parsePctFromText(entry),
       }
     }
-
     if (typeof entry === 'number') {
       return {
         text: `${entry}`,
         pct: null,
       }
     }
-
     const textValue = formatDiskEntry(entry)
     if (!textValue) return null
     return {
@@ -179,18 +162,14 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
       pct: parsePctFromText(textValue),
     }
   }
-
   const renderDisksWithBars = (disks) => {
     if (!Array.isArray(disks) || disks.length === 0) {
       return '\u2014'
     }
-
     const items = disks
       .map(normalizeDiskForDisplay)
       .filter((disk) => disk && disk.text)
-
     if (!items.length) return '\u2014'
-
     return (
       <div className="flex flex-col gap-2">
         {items.map((disk, index) => {
@@ -222,7 +201,6 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
       </div>
     )
   }
-
   const ramTotalMiBRaw =
     baseVm.RAM ??
     baseVm.RAM_MiB ??
@@ -234,10 +212,8 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
     baseVm.RAMAssignedMiB ??
     baseVm.RAM_TotalMiB ??
     null
-
   const ramTotalGiBDisplay = formatGiB(ramTotalMiBRaw)
   const ramTotalMiB = ramTotalMiBRaw ?? '\u2014'
-
   const ramDemandMiBRaw =
     baseVm.RAM_Demand_MiB ??
     baseVm.RAM_DemandMiB ??
@@ -249,10 +225,8 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
     baseVm.ram_demand_mib ??
     baseVm.ramDemandMiB ??
     null
-
   const ramDemandGiBDisplay = formatGiB(ramDemandMiBRaw)
   const ramDemandMiB = ramDemandMiBRaw ?? '\u2014'
-
   const ramPctRaw =
     baseVm.RAM_UsagePct ??
     baseVm.ram_pct ??
@@ -264,7 +238,6 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
   const ramPctDisplay = ramPctRaw !== null && ramPctRaw !== undefined
     ? `${ramPctRaw}%`
     : '\u2014'
-
   const osDisplay =
     baseVm.OS ||
     baseVm.os ||
@@ -273,7 +246,6 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
     baseVm.GuestOS ||
     baseVm.guestOS ||
     '\u2014'
-
   let ipv4Display = '\u2014'
   if (Array.isArray(baseVm.IPv4)) {
     const joined = baseVm.IPv4.filter(Boolean).join(', ').trim()
@@ -290,7 +262,6 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
       baseVm.PrimaryIP ??
       baseVm.primaryIp ??
       null
-
     if (Array.isArray(ipv4Fallback)) {
       const joined = ipv4Fallback.filter(Boolean).join(', ').trim()
       if (joined) ipv4Display = joined
@@ -298,7 +269,6 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
       ipv4Display = ipv4Fallback
     }
   }
-
   const vlanDisplayRaw =
     baseVm.VLAN ??
     baseVm.vlan ??
@@ -309,7 +279,6 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
     baseVm.VLANID ??
     baseVm.VlanId ??
     null
-
   const vlanDisplay = Array.isArray(vlanDisplayRaw)
     ? (vlanDisplayRaw.filter(Boolean).join(', ').trim() || '\u2014')
     : (
@@ -317,7 +286,6 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
         ? vlanDisplayRaw
         : '\u2014'
     )
-
   function inferClusterFromHost(obj) {
     const hvhost =
       obj.HVHost ||
@@ -325,26 +293,21 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
       obj.HVHOST ||
       obj.hypervHost ||
       ''
-
     if (typeof hvhost === 'string' && hvhost.length > 0) {
       const first = hvhost[0].toUpperCase()
       if (first === 'S') return 'sandbox'
       if (first === 'T') return 'test'
       if (first === 'P') return 'produccion'
     }
-
     return null
   }
-
   const clusterExplicit =
     baseVm.Cluster ||
     baseVm.cluster ||
     baseVm.ClusterName ||
     null
-
   const clusterDerived = inferClusterFromHost(baseVm)
   const clusterDisplay = clusterExplicit || clusterDerived || '\u2014'
-
   const compatVersionRaw =
     baseVm.CompatibilityVersion ??
     baseVm.compatibilityVersion ??
@@ -356,7 +319,6 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
     baseVm.CompatHW?.Version ??
     null
   const compatVersionDisplay = compatVersionRaw ?? '\u2014'
-
   const compatGenerationRaw =
     baseVm.CompatibilityGeneration ??
     baseVm.compatibilityGeneration ??
@@ -368,19 +330,15 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
     baseVm.CompatHW?.Generation ??
     null
   const compatGenerationDisplay = compatGenerationRaw ?? '\u2014'
-
   const formatDiskEntry = (entry) => {
     if (!entry) return ''
     if (typeof entry === 'string') return entry
     if (typeof entry === 'number') return `${entry}`
-
     const displayObj =
       (typeof entry.Display === 'object' && entry.Display !== null && entry.Display) ||
       (typeof entry.display === 'object' && entry.display !== null && entry.display) ||
       null
-
     const source = displayObj || entry
-
     const resolveValue = (...candidates) => {
       for (const value of candidates) {
         if (value === undefined || value === null || value === '') continue
@@ -388,7 +346,6 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
       }
       return undefined
     }
-
     const alloc = resolveValue(
       source.AllocatedGiB,
       source.allocatedGiB,
@@ -405,7 +362,6 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
       entry.Allocated,
       entry.allocated
     )
-
     const size = resolveValue(
       source.SizeGiB,
       source.sizeGiB,
@@ -422,7 +378,6 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
       entry.Size,
       entry.size
     )
-
     const pct = resolveValue(
       source.AllocatedPct,
       source.allocatedPct,
@@ -435,7 +390,6 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
       entry.percent,
       entry.pct
     )
-
     if (size && pct !== undefined && pct !== null && pct !== '') {
       const allocText =
         alloc !== undefined && alloc !== null && alloc !== ''
@@ -443,7 +397,6 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
           : '\u2014'
       return `${allocText} / ${size} (${pct}%)`
     }
-
     const displayText = resolveValue(
       typeof entry.Display === 'string' ? entry.Display : undefined,
       typeof entry.display === 'string' ? entry.display : undefined,
@@ -451,7 +404,6 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
       typeof source.display === 'string' ? source.display : undefined
     )
     if (displayText) return displayText
-
     if (source && typeof source.toString === 'function') {
       const strValue = source.toString.call(source)
       if (strValue && strValue !== '[object Object]') return strValue
@@ -460,7 +412,6 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
       const strValue = entry.toString.call(entry)
       if (strValue && strValue !== '[object Object]') return strValue
     }
-
     try {
       const json = JSON.stringify(source)
       return json && json !== '{}' ? json : ''
@@ -468,20 +419,17 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
       return ''
     }
   }
-
   const buildDisksDisplay = () => {
     const normalized = Array.isArray(baseVm.disks) ? baseVm.disks : null
     if (normalized && normalized.length) {
       return renderDisksWithBars(normalized)
     }
-
     const sources = [
       baseVm.Disks,
       baseVm.disks,
       baseVm.DisksDisplay,
       baseVm.disksDisplay,
     ]
-
     for (const source of sources) {
       if (Array.isArray(source) && source.length) {
         const entries = source
@@ -492,25 +440,19 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
         }
       }
     }
-
     const fallbackString =
       baseVm.DisksString ||
       baseVm.disksString ||
       baseVm.DisksText ||
       baseVm.disksText ||
       null
-
     if (typeof fallbackString === 'string' && fallbackString.trim()) {
       return renderDisksWithBars([fallbackString])
     }
-
     return '\u2014'
   }
-
   const disksDisplay = buildDisksDisplay()
-
   const computedEnv = inferEnvironment({ vm: baseVm, selectorKey })
-
   // DEBUG MUY VERBOSO
   console.log('[HyperVDetailModal] baseVm =', baseVm)
   console.log('[HyperVDetailModal] selectorKey =', selectorKey)
@@ -518,7 +460,6 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
   console.log('[HyperVDetailModal] Name =', baseVm?.Name || baseVm?.name)
   console.log('[HyperVDetailModal] Cluster =', baseVm?.Cluster || baseVm?.cluster)
   console.log('[HyperVDetailModal] HVHost =', baseVm?.HVHost || baseVm?.host)
-
   useEffect(() => {
     if (!record) return
     modalRef.current?.focus()
@@ -526,58 +467,51 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
   }, [record, onClose])
-
   if (!record) return null
-
   const details = [
     ['Nombre', baseVm.Name || baseVm.name],
     ['Estado', friendlyPowerState],
     ['Ambiente', computedEnv || baseVm.Env || baseVm.env || '\u2014'],
     ['Host', baseVm.HVHost || baseVm.Host || baseVm.host || '\u2014'],
     ['Cluster', clusterDisplay],
-
     ['CPU', baseVm.CPUs || baseVm.NumCPU || baseVm.vCPU || baseVm.cpu_count || baseVm.cpu || baseVm.CPU || baseVm.NumCpus || baseVm.ProcessorCount || baseVm.processorCount || '\u2014'],
     ['CPU (%)', renderPercentWithBar(cpuPctRaw)],
-
     ['RAM (GiB)', ramTotalGiBDisplay],
     ['RAM demanda (GiB)', ramDemandGiBDisplay],
     ['RAM (%)', renderPercentWithBar(ramPctRaw)],
-
     ['SO', osDisplay],
     ['VLAN(s)', vlanDisplay],
-
     ['IPv4', ipv4Display],
-
     ['Discos', disksDisplay],
-
     ['Compatibilidad versi\u00f3n', compatVersionDisplay],
     ['Compatibilidad generaci\u00f3n', compatGenerationDisplay],
   ]
-
   const actionButton = (text, themeKey, apiPath, Icon) => {
     const isLoading = actionLoading === apiPath
     const theme = ACTION_THEMES[themeKey] ?? ACTION_THEMES.start
+    const disabled = powerDisabled || isLoading
     return (
       <Motion.button
         key={apiPath}
         type="button"
-        whileHover={isLoading ? {} : { scale: 1.05 }}
-        whileTap={isLoading ? {} : { scale: 0.95 }}
-        disabled={isLoading}
+        whileHover={disabled ? {} : { scale: 1.05 }}
+        whileTap={disabled ? {} : { scale: 0.95 }}
+        disabled={disabled}
+        title={powerDisabled ? powerDisabledMessage : undefined}
         className={[
-          'flex items-center justify-center py-2 rounded font-medium text-white shadow transition focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
+          'flex items-center justify-center rounded px-4 py-2 font-medium text-white shadow transition focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
           theme.base,
-          isLoading ? 'opacity-70 cursor-not-allowed' : '',
+          disabled ? 'cursor-not-allowed opacity-60' : '',
         ].join(' ')}
         onClick={() => {
-          if (isLoading) return
+          if (disabled) return
           setPending({ apiPath, text })
           setSuccessMsg('')
           setError('')
         }}
       >
         {isLoading ? (
-          <svg className="inline-block w-5 h-5 animate-spin text-white" viewBox="0 0 24 24" fill="none">
+          <svg className="inline-block h-5 w-5 animate-spin text-white" viewBox="0 0 24 24" fill="none">
             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
           </svg>
@@ -590,18 +524,15 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
       </Motion.button>
     )
   }
-
   const backdropVariants = {
     hidden: { opacity: 0 },
     visible: { opacity: 1, transition: { duration: 0.2 } },
   }
-
   const modalVariants = {
     hidden: { opacity: 0, scale: 0.95 },
     visible: { opacity: 1, scale: 1, transition: { duration: 0.2 } },
     exit: { opacity: 0, scale: 0.95, transition: { duration: 0.15 } },
   }
-
   const content = (
     <AnimatePresence>
       <Motion.div
@@ -632,23 +563,19 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
           >
             脳
           </button>
-
           <h3 id="hyperv-detail-title" className="text-2xl font-semibold mb-4">
             Detalle VM {baseVm.Name || baseVm.name}
           </h3>
-
           {successMsg && (
             <div className="bg-green-100 text-green-800 p-3 rounded mb-4">
               {successMsg}
             </div>
           )}
-
           {error && (
             <div className="bg-red-100 text-red-700 p-3 rounded mb-4">
               {error}
             </div>
           )}
-
           {loading && (
             <div className="space-y-3 mb-6 px-4">
               {SKELETON_WIDTHS.map((widthClass, index) => (
@@ -659,11 +586,10 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
               ))}
             </div>
           )}
-
           {pending && (
             <div className="bg-gray-100 border border-gray-300 rounded p-4 mb-4">
               <p className="text-gray-800">
-                驴Seguro que deseas <strong>{pending.text.toLowerCase()}</strong> la VM {baseVm.Name || baseVm.name}?
+                耂eguro que deseas <strong>{pending.text.toLowerCase()}</strong> la VM {baseVm.Name || baseVm.name}?
               </p>
               <div className="flex justify-end gap-2 mt-3">
                 <button
@@ -678,6 +604,11 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
                       setError("Falta HVHost o VMName");
                       return;
                     }
+                    if (powerDisabled) {
+                      alert('Acceso denegado (403).')
+                      setPending(null)
+                      return
+                    }
                     setActionLoading(pending.apiPath);
                     setError("");
                     let ok = false;
@@ -691,11 +622,14 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
                         `Acci贸n ${pending.text.toLowerCase()} aceptada para ${vmname} en ${hvhost}.`
                       );
                     } catch (err) {
+                      if (err?.response?.status === 403) {
+                        alert('Acceso denegado (403).')
+                      }
                       const apiDetail =
                         err?.response?.data?.detail ||
                         err?.message ||
-                        "Error al ejecutar la acci贸n solicitada.";
-                      setError(apiDetail);
+                        'Error al ejecutar la acci贸n solicitada.'
+                      setError(apiDetail)
                     } finally {
                       setActionLoading(null);
                       setPending(null);
@@ -713,7 +647,6 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
               </div>
             </div>
           )}
-
           {!loading && (
             <dl className="grid grid-cols-2 gap-x-6 gap-y-2 mb-6 px-2">
               {details.map(([label, value]) => (
@@ -724,17 +657,17 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
               ))}
             </dl>
           )}
-
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            {actionButton('Encender', 'start', 'start', IoPowerSharp)}
-            {actionButton('Apagar', 'stop', 'stop', IoPowerOutline)}
-            {actionButton('Reset', 'reset', 'reset', IoRefreshSharp)}
-          </div>
+  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+    {actionButton('Encender', 'start', 'start', IoPowerSharp)}
+    {actionButton('Apagar', 'stop', 'stop', IoPowerOutline)}
+    {actionButton('Reset', 'reset', 'reset', IoRefreshSharp)}
+  </div>
+  {powerDisabled && (
+    <p className="mt-3 text-xs text-red-500">{powerDisabledMessage}</p>
+  )}
         </Motion.div>
       </Motion.div>
     </AnimatePresence>
   )
-
   return createPortal(content, document.body)
 }
-

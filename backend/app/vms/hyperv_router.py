@@ -9,7 +9,8 @@ from typing import List, Optional
 from cachetools import TTLCache
 from fastapi import APIRouter, Depends, HTTPException, Query, Path as PathParam
 
-from app.dependencies import get_current_user
+from app.auth.user_model import User
+from app.dependencies import get_current_user, require_admin
 from app.providers.hyperv.remote import RemoteCreds, run_power_action
 from app.providers.hyperv.schema import VMRecord
 from app.vms.hyperv_service import collect_hyperv_inventory_for_host
@@ -65,7 +66,7 @@ def get_creds(
 def list_hyperv_vms(
     refresh: bool = Query(False, description="Forzar refresco desde los hosts, ignorando cache"),
     creds: RemoteCreds = Depends(get_creds),
-    _user: str = Depends(get_current_user),
+    _user: User = Depends(get_current_user),
 ):
     ps_content = _load_ps_content()
     items = collect_hyperv_inventory_for_host(
@@ -92,7 +93,7 @@ def list_hyperv_vms_batch(
     ),
     max_workers: int = Query(4, ge=1, le=16, description="Paralelismo de consultas"),
     refresh: bool = Query(False, description="Forzar refresco y omitir cache"),
-    _user: str = Depends(get_current_user),
+    _user: User = Depends(get_current_user),
 ):
     # 1) resolver lista de hosts
     if hosts:
@@ -157,7 +158,7 @@ def hyperv_vm_power_action(
     vm_name: str = PathParam(..., description="Nombre EXACTO de la VM tal como aparece en Hyper-V"),
     action: str = PathParam(..., description="Acción: start, stop o reset"),
     refresh: bool = Query(False, description="Forzar refresco de inventario antes de actuar"),
-    _user: str = Depends(get_current_user),
+    _user: User = Depends(require_admin),
 ):
     """
     Ejecuta una acción de energía ('start', 'stop', 'reset') sobre una VM específica
@@ -194,7 +195,7 @@ def lab_power_action(
     hvhost: str,
     vm_name: str,
     action: str,
-    _user: str = Depends(get_current_user),
+    _user: User = Depends(require_admin),
 ):
     """
     Endpoint TEMPORAL de laboratorio (solo local).

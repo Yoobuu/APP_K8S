@@ -17,12 +17,14 @@ api.interceptors.request.use((config) => {
       const { exp } = jwtDecode(token);
       if (exp * 1000 < Date.now()) {
         localStorage.removeItem("token");
+        window.dispatchEvent(new Event("auth:logout"));
         window.location.href = "/login";  // Redirige al login si expiró
         return Promise.reject(new Error("Token expirado"));
       }
     } catch (err) {
       // Si el token no es decodificable, se elimina y se redirige evitando bloqueos
       localStorage.removeItem("token");
+      window.dispatchEvent(new Event("auth:logout"));
       window.location.href = "/login";
       return Promise.reject(err);
     }
@@ -40,6 +42,7 @@ api.interceptors.response.use(
     if (error.response?.status === 401) {
       // Si la API responde con 401, limpia el token y redirige al login
       localStorage.removeItem("token");
+      window.dispatchEvent(new Event("auth:logout"));
       window.location.href = "/login";
     }
     return Promise.reject(error);

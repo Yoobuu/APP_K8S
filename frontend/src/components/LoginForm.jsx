@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import api from "../api/axios"; // baseURL debe terminar en /api para usar .post("/login")
+import api from "../api/axios";
+import { useAuth } from "../context/AuthContext";
 
 /**
  * LoginRedesign.jsx
@@ -9,12 +10,12 @@ import api from "../api/axios"; // baseURL debe terminar en /api para usar .post
  */
 
 const PROVIDERS = [
-  { key: "vcenter", label: "VMware vCenter",  tone: "bg-emerald-600", ring: "ring-emerald-500", text: "text-emerald-400" },
-  { key: "hyperv",  label: "Microsoft Hyper-V", tone: "bg-blue-600",    ring: "ring-blue-500",    text: "text-blue-400" },
-  { key: "kvm",     label: "KVM / Libvirt",     tone: "bg-neutral-800", ring: "ring-neutral-500", text: "text-neutral-300" },
+  { key: "vcenter", label: "VMware vCenter", tone: "bg-emerald-600", ring: "ring-emerald-500", text: "text-emerald-400" },
+  { key: "hyperv", label: "Microsoft Hyper-V", tone: "bg-blue-600", ring: "ring-blue-500", text: "text-blue-400" },
+  { key: "kvm", label: "KVM / Libvirt", tone: "bg-neutral-800", ring: "ring-neutral-500", text: "text-neutral-300" },
 ];
 
-export default function LoginRedesign({ onLogin }) {
+export default function LoginRedesign() {
   const [provider, setProvider] = useState("vcenter");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -25,27 +26,31 @@ export default function LoginRedesign({ onLogin }) {
   const [caps, setCaps] = useState(false);
 
   const navigate = useNavigate();
-  const theme = useMemo(() => PROVIDERS.find(p => p.key === provider) || PROVIDERS[0], [provider]);
+  const { login } = useAuth();
+  const theme = useMemo(() => PROVIDERS.find((p) => p.key === provider) || PROVIDERS[0], [provider]);
 
   useEffect(() => {
     const onKey = (e) => setCaps(e.getModifierState && e.getModifierState("CapsLock"));
     window.addEventListener("keyup", onKey);
     window.addEventListener("keydown", onKey);
-    return () => { window.removeEventListener("keyup", onKey); window.removeEventListener("keydown", onKey); };
+    return () => {
+      window.removeEventListener("keyup", onKey);
+      window.removeEventListener("keydown", onKey);
+    };
   }, []);
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
+  const handleSubmit = async (event) => {
+    event.preventDefault();
     setError("");
     setLoading(true);
     try {
-      // Si api.baseURL termina en /api, aquí debe ser "/login"
       const res = await api.post("/auth/login", { username, password, provider });
+      const { access_token: accessToken, user } = res?.data || {};
 
-      // Guarda token (ajusta la clave según tu backend)
-      if (res?.data?.access_token) localStorage.setItem("token", res.data.access_token);
+      if (accessToken) {
+        login({ token: accessToken, user });
+      }
 
-      // Preferencias
       if (remember) {
         localStorage.setItem("provider", provider);
         localStorage.setItem("last_username", username);
@@ -54,8 +59,6 @@ export default function LoginRedesign({ onLogin }) {
         localStorage.removeItem("last_username");
       }
 
-      // Notifica al padre (App.jsx) y navega
-      onLogin?.();
       navigate("/choose", { replace: true });
     } catch (err) {
       const msg = err?.response?.data?.detail || err?.message || "Error de autenticación";
@@ -108,8 +111,9 @@ export default function LoginRedesign({ onLogin }) {
                 key={p.key}
                 onClick={() => setProvider(p.key)}
                 className={`rounded-full px-3 py-1.5 text-xs ring-1 transition ${
-                  provider === p.key ? `${p.tone} text-white ring-transparent`
-                  : `bg-neutral-800 hover:bg-neutral-700 ${p.ring} text-neutral-200`
+                  provider === p.key
+                    ? `${p.tone} text-white ring-transparent`
+                    : `bg-neutral-800 hover:bg-neutral-700 ${p.ring} text-neutral-200`
                 }`}
               >
                 {p.label}
@@ -182,7 +186,9 @@ export default function LoginRedesign({ onLogin }) {
               disabled={loading}
               className={`group relative flex w-full items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium shadow ${accentBtn} disabled:cursor-not-allowed disabled:opacity-60`}
             >
-              {loading && <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/70 border-t-transparent" />}
+              {loading && (
+                <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/70 border-t-transparent" />
+              )}
               <span>Entrar</span>
               <span className="pointer-events-none absolute inset-x-0 -bottom-1 mx-auto h-px w-10 bg-white/50 opacity-0 transition group-hover:opacity-100" />
             </button>
@@ -198,7 +204,7 @@ export default function LoginRedesign({ onLogin }) {
               <span className="h-2 w-2 rounded-full bg-neutral-700" />
               <span>KVM</span>
             </div>
-            <div>Inventario DC • Seguridad primero</div>
+            <div>Inventario DC · Seguridad primero</div>
           </div>
         </div>
       </div>

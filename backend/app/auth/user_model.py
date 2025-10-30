@@ -1,4 +1,12 @@
+from enum import Enum
+
 from sqlmodel import SQLModel, Field
+
+
+class UserRole(str, Enum):
+    SUPERADMIN = "superadmin"
+    ADMIN = "admin"
+    USER = "user"
 
 # —————— Definición del modelo de usuario ——————
 class User(SQLModel, table=True):
@@ -13,3 +21,4 @@ class User(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     username: str       = Field(index=True, unique=True)
     hashed_password: str
+    role: UserRole = Field(default=UserRole.USER, nullable=False)

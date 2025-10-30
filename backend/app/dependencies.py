@@ -1,56 +1,82 @@
-import logging
+from __future__ import annotations
 
 from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jose import JWTError, ExpiredSignatureError, jwt
-from sqlmodel import Session
+from fastapi.security import OAuth2PasswordBearer
+from jose import ExpiredSignatureError, JWTError
+from sqlmodel import Session, select
 
-from app.config import ALGORITHM, SECRET_KEY
-from app.db import engine
+from app.auth.jwt_handler import decode_access_token
+from app.auth.user_model import User, UserRole
+from app.db import get_session
 
-# —————— Seguridad y autenticación JWT ——————
-security = HTTPBearer()
-logger = logging.getLogger(__name__)
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
 
-def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> str:
+def get_current_user(
+    token: str = Depends(oauth2_scheme),
+    session: Session = Depends(get_session),
+) -> User:
     """
-    1. Extrae el token Bearer de la cabecera Authorization.
-    2. Decodifica y valida el JWT (firma y expiración).
-    3. Recupera el campo 'sub' (username) del payload.
-    4. Lanza 401 si el token está expirado, inválido o carece de 'sub'.
+    Valida el token JWT recibido y devuelve la entidad User correspondiente.
+    Lanza HTTP 401 si el token es inválido/expirado o el usuario no existe.
     """
-    token = credentials.credentials
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username: str = payload.get("sub")
-        if username is None:
-            logger.warning("JWT token lacking 'sub' claim")
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Token inválido (sin 'sub')"
-            )
-        return username
+        payload = decode_access_token(token)
     except ExpiredSignatureError:
-        logger.info("Expired JWT received")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token expirado"
-        )
+            detail="Token expirado",
+        ) from None
     except JWTError:
-        logger.warning("Invalid JWT received")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token inválido"
+            detail="Token inválido",
+        ) from None
+
+    sub = payload.get("sub")
+    if sub is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token inválido (sin 'sub')",
         )
 
+    try:
+        user_id = int(sub)
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token inválido (sub inválido)",
+        ) from None
 
-def get_session():
+    user = session.exec(select(User).where(User.id == user_id)).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Usuario no encontrado",
+        )
+
+    return user
+
+
+def require_admin(current_user: User = Depends(get_current_user)) -> User:
     """
-    Proporciona una sesión de base de datos:
-    - Crea un contexto de sesión SQLModel ligado al engine configurado.
-    - Yield de la sesión para inyectarla en dependencias de rutas.
-    - Cierra la sesión automáticamente al finalizar.
+    Permite acceso solamente a usuarios con rol ADMIN o SUPERADMIN.
     """
-    with Session(engine) as session:
-        yield session
+    if current_user.role not in (UserRole.ADMIN, UserRole.SUPERADMIN):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Permisos insuficientes",
+        )
+    return current_user
+
+
+def require_superadmin(current_user: User = Depends(get_current_user)) -> User:
+    """
+    Permite acceso únicamente a usuarios con rol SUPERADMIN.
+    """
+    if current_user.role != UserRole.SUPERADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Permisos insuficientes",
+        )
+    return current_user

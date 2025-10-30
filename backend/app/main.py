@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 # Cargar variables de entorno desde .env (debe ejecutarse desde /backend)
 load_dotenv()
 
-from app.auth import auth_router  # /api/auth/...
+from app.auth import auth_router, user_admin_router  # /api/auth/...
 from app.startup import register_startup_events
 from app.vms import vm_router  # /api/vms (VMware)
 from app.vms.hyperv_router import router as hyperv_router  # /api/hyperv (Hyper-V)
@@ -49,5 +49,6 @@ app.add_middleware(
 
 # Routers (orden no importa, pero manténlos agrupados)
 app.include_router(auth_router.router, prefix="/api/auth")  # /api/auth/...
+app.include_router(user_admin_router.router)  # /api/users (Admin)
 app.include_router(vm_router.router, prefix="/api")  # /api/vms (VMware)
 app.include_router(hyperv_router)  # /api/hyperv (Hyper-V)
