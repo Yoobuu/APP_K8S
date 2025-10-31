@@ -14,10 +14,11 @@ if BACKEND_ROOT not in sys.path:
     sys.path.insert(0, BACKEND_ROOT)
 
 from app.auth.user_model import User  # noqa: E402
-from app.db import engine  # noqa: E402
+from app.db import get_engine  # noqa: E402
 
 
 def main() -> None:
+    engine = get_engine()
     with Session(engine) as session:
         users = session.exec(select(User)).all()
         if not users:

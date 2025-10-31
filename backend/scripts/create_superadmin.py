@@ -15,7 +15,7 @@ if BACKEND_ROOT not in sys.path:
     sys.path.insert(0, BACKEND_ROOT)
 
 from app.auth.user_model import User, UserRole
-from app.db import engine
+from app.db import get_engine
 
 
 def prompt_credentials() -> tuple[str, str]:
@@ -36,6 +36,7 @@ def prompt_credentials() -> tuple[str, str]:
 def main() -> None:
     username, password = prompt_credentials()
 
+    engine = get_engine()
     with Session(engine) as session:
         existing = session.exec(
             select(User).where(User.username == username)

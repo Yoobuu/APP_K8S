@@ -10,6 +10,7 @@ from typing import List
 from fastapi import FastAPI
 
 from app.db import init_db
+from app.notifications.models import Notification  # noqa: F401
 from app.vms import vm_service
 
 logger = logging.getLogger(__name__)
@@ -48,13 +49,16 @@ def register_startup_events(app: FastAPI) -> None:
         else:
             logger.info("Environment variables validated successfully")
 
-        try:
-            init_db()
-            diagnostics.db_initialized = True
-            logger.info("Database metadata ensured")
-        except Exception as exc:  # pragma: no cover - defensive
-            diagnostics.errors.append(f"Database init failed: {exc}")
-            logger.exception("Database initialization failed")
+        if os.getenv("TESTING") == "1":
+            logger.info("Skipping database initialization in testing mode")
+        else:
+            try:
+                init_db()
+                diagnostics.db_initialized = True
+                logger.info("Database metadata ensured")
+            except Exception as exc:  # pragma: no cover - defensive
+                diagnostics.errors.append(f"Database init failed: {exc}")
+                logger.exception("Database initialization failed")
 
         vm_service.reset_caches()
         logger.info("VM caches cleared on startup")
@@ -64,4 +68,34 @@ def register_startup_events(app: FastAPI) -> None:
             diagnostics.env_issues.extend(vc_issues)
             logger.error("vCenter configuration issues: %s", vc_issues)
 
+        scheduler_enabled = os.getenv("NOTIF_SCHED_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+        notification_scheduler = None
+        if scheduler_enabled:
+            try:
+                from app.notifications.scheduler import create_scheduler, schedule_scan_job
+
+                notification_scheduler = create_scheduler()
+                schedule_scan_job(notification_scheduler)
+                notification_scheduler.start()
+                logger.info(
+                    "Notification scheduler started (dev_minutes=%s)",
+                    os.getenv("NOTIF_SCHED_DEV_MINUTES"),
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.exception("Failed to start notification scheduler: %s", exc)
+                notification_scheduler = None
+        else:
+            logger.info("Notification scheduler disabled via NOTIF_SCHED_ENABLED")
+
+        app.state.notification_scheduler = notification_scheduler
         app.state.startup_diagnostics = diagnostics
+
+    @app.on_event("shutdown")
+    async def on_shutdown() -> None:
+        scheduler = getattr(app.state, "notification_scheduler", None)
+        if scheduler is not None:
+            try:
+                scheduler.shutdown(wait=False)
+                logger.info("Notification scheduler stopped")
+            except Exception:  # pragma: no cover - defensive
+                logger.exception("Failed to stop notification scheduler")

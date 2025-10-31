@@ -1,0 +1,83 @@
+from __future__ import annotations
+
+import logging
+import os
+from datetime import datetime, timezone
+from typing import List, Optional
+
+from sqlmodel import Session
+
+from app.audit.service import log_audit
+from app.db import get_engine
+from app.notifications.models import NotificationMetric, NotificationProvider
+from app.notifications.reconciler import (
+    NotificationLike,
+    ReconciliationReport,
+    reconcile_notifications,
+)
+from app.notifications.sampler import collect_all_samples
+from app.notifications.service import evaluate_batch
+
+logger = logging.getLogger(__name__)
+
+ENABLED_VALUES = {"1", "true", "yes", "on"}
+
+
+def _is_autoclear_enabled() -> bool:
+    explicit = os.getenv("NOTIFS_AUTOCLEAR_ENABLED")
+    if explicit is not None:
+        return explicit.strip().lower() in ENABLED_VALUES
+
+    if os.getenv("TESTING") == "1":
+        return False
+    return True
+
+
+def _build_anomalies(refresh: bool) -> List[NotificationLike]:
+    samples = collect_all_samples(refresh=refresh)
+    notifications = evaluate_batch(samples, threshold=85.0)
+
+    anomalies: List[NotificationLike] = []
+    for notif in notifications:
+        provider = notif.provider.value if isinstance(notif.provider, NotificationProvider) else str(notif.provider)
+        metric = notif.metric.value if isinstance(notif.metric, NotificationMetric) else str(notif.metric)
+        anomalies.append(
+            {
+                "provider": provider,
+                "vm_name": notif.vm_name,
+                "vm_id": notif.vm_id,
+                "metric": metric,
+                "value_pct": float(notif.value_pct),
+                "threshold_pct": float(notif.threshold_pct),
+                "env": notif.env,
+                "at": notif.at,
+                "disks_json": notif.disks_json,
+            }
+        )
+    return anomalies
+
+
+def run_hourly_reconcile(refresh: bool = True) -> Optional[ReconciliationReport]:
+    if not _is_autoclear_enabled():
+        logger.info("Notifications autoclear disabled via NOTIFS_AUTOCLEAR_ENABLED")
+        return None
+
+    anomalies = _build_anomalies(refresh=refresh)
+    now = datetime.now(timezone.utc)
+
+    report = reconcile_notifications(anomalies, now)
+
+    engine = get_engine()
+    with Session(engine) as session:
+        log_audit(
+            session,
+            actor={"username": "system"},
+            action="notifications.reconcile",
+            target_type="notification",
+            target_id=None,
+            meta=report.to_dict(),
+        )
+        session.commit()
+
+    logger.info("Notifications reconciliation completed: %s", report.to_dict())
+    return report

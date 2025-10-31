@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import ssl
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from threading import Lock
 from typing import Dict, Iterable, List, Optional
@@ -592,6 +593,27 @@ def get_vms(*, refresh: bool = False) -> List[VMBase]:
 
     vm_cache["vms"] = out
     return out
+
+
+def fetch_vmware_snapshot(*, refresh: bool = False) -> List[Dict[str, object]]:
+    """
+    Provide a lightweight snapshot of VMware metrics using the same data as the inventory UI.
+    """
+    observed_at = datetime.now(timezone.utc)
+    vms = get_vms(refresh=refresh)
+    snapshot: List[Dict[str, object]] = []
+    for vm in vms:
+        snapshot.append(
+            {
+                "vm_name": vm.name,
+                "vm_id": vm.id,
+                "cpu_pct": vm.cpu_usage_pct,
+                "ram_pct": vm.ram_usage_pct,
+                "env": vm.environment,
+                "at": observed_at,
+            }
+        )
+    return snapshot
 
 
 def power_action(vm_id: str, action: str) -> dict:
