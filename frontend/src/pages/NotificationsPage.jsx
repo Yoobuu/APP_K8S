@@ -10,6 +10,18 @@ const PROVIDER_OPTIONS = ["", "HYPERV", "VMWARE"];
 const METRIC_OPTIONS = ["", "CPU", "RAM", "DISK"];
 const LIMIT_OPTIONS = [10, 25, 50];
 
+const createInitialFilters = () => ({
+  statuses: [NOTIFICATION_STATUS.OPEN],
+  provider: "",
+  metric: "",
+  vm: "",
+  env: "",
+  from: "",
+  to: "",
+  limit: 25,
+  offset: 0,
+});
+
 const STATUS_META = {
   [NOTIFICATION_STATUS.OPEN]: {
     value: NOTIFICATION_STATUS.OPEN,
@@ -119,20 +131,10 @@ function ToastStack({ toasts, onDismiss }) {
 }
 
 export default function NotificationsPage() {
-  const { isSuperadmin } = useAuth();
+  const { hasPermission } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
 
-  const [filters, setFilters] = useState({
-    statuses: [NOTIFICATION_STATUS.OPEN],
-    provider: "",
-    metric: "",
-    vm: "",
-    env: "",
-    from: "",
-    to: "",
-    limit: 25,
-    offset: 0,
-  });
+  const [filters, setFilters] = useState(() => createInitialFilters());
 
   const [data, setData] = useState({ items: [], total: 0 });
   const [loading, setLoading] = useState(false);
@@ -228,10 +230,13 @@ export default function NotificationsPage() {
     }
   }, [filters, showToast]);
 
+  const canViewNotifications = hasPermission("notifications.view");
+  const canAckNotification = hasPermission("notifications.ack");
+
   useEffect(() => {
-    if (!isSuperadmin) return;
+    if (!canViewNotifications) return;
     fetchData();
-  }, [fetchData, isSuperadmin]);
+  }, [fetchData, canViewNotifications]);
 
   const syncSearchParams = useCallback(
     (nextFilters) => {
@@ -272,6 +277,12 @@ export default function NotificationsPage() {
     });
   };
 
+  const resetFilters = useCallback(() => {
+    const next = createInitialFilters();
+    setFilters(next);
+    syncSearchParams(next);
+  }, [syncSearchParams]);
+
   const lastCreatedAt = useMemo(() => {
     if (!data.items.length) return null;
     return data.items.reduce((acc, item) => {
@@ -284,6 +295,10 @@ export default function NotificationsPage() {
 
   const handleAck = useCallback(
     async (notification) => {
+      if (!canAckNotification) {
+        showToast("No tienes permiso para reconocer notificaciones.", "error");
+        return;
+      }
       try {
         await ackNotification(notification.id);
         showToast("Notificación marcada como En revisión.", "success");
@@ -297,7 +312,7 @@ export default function NotificationsPage() {
         showToast(detail, "error");
       }
     },
-    [fetchData, showToast],
+    [fetchData, showToast, canAckNotification],
   );
 
   const openDisksModal = useCallback((notification) => {
@@ -316,13 +331,13 @@ export default function NotificationsPage() {
   const canGoBack = filters.offset > 0;
   const canGoForward = filters.offset + filters.limit < data.total;
 
-  if (!isSuperadmin) {
+  if (!canViewNotifications) {
     return (
       <div className="flex flex-1 items-center justify-center px-6 py-20">
         <div className="max-w-md rounded-lg border border-gray-200 bg-white p-8 text-center shadow">
           <h2 className="text-lg font-semibold text-gray-900">Acceso denegado</h2>
           <p className="mt-2 text-sm text-gray-600">
-            Esta sección solo está disponible para usuarios con rol <strong>SUPERADMIN</strong>.
+            Necesitas el permiso <strong>notifications.view</strong> para acceder a esta sección.
           </p>
         </div>
       </div>
@@ -484,7 +499,9 @@ export default function NotificationsPage() {
             loading={loading}
             fetchError={fetchError}
             onAck={handleAck}
+            canAckPermission={canAckNotification}
             onViewDisks={openDisksModal}
+            onResetFilters={resetFilters}
             formatDate={formatDate}
             formatDateUTC={formatDateUTC}
             formatNumber={formatNumber}

@@ -10,10 +10,10 @@ from app.auth.user_model import User
 from app.db import get_session
 from app.dependencies import (
     AuditRequestContext,
-    get_current_user,
     get_request_audit_context,
-    require_admin,
+    require_permission,
 )
+from app.permissions.models import PermissionCode
 from app.utils.text import normalize_text
 from app.vms.vm_models import VMBase, VMDetail
 from app.vms.vm_perf_service import get_vm_perf_summary
@@ -28,7 +28,7 @@ def list_vms(
     name: Optional[str] = Query(None, description="Filtrar por nombre parcial"),
     environment: Optional[str] = Query(None, description="Filtrar por ambiente"),
     refresh: bool = Query(False, description="Forzar refresco del inventario de VMware"),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission(PermissionCode.VMS_VIEW)),
 ):
     logger.info(
         "GET /api/vms requested by '%s' (refresh=%s)",
@@ -58,7 +58,7 @@ def list_vms(
 def vm_power_action(
     vm_id: str = Path(..., description="ID de la VM"),
     action: str = Path(..., description="Accion: start, stop o reset"),
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(require_permission(PermissionCode.VMS_POWER)),
     session: Session = Depends(get_session),
     audit_ctx: AuditRequestContext = Depends(get_request_audit_context),
 ):
@@ -99,7 +99,7 @@ def vm_perf_summary(
         False,
         description="Incluye metricas por disco (instancias individuales)."
     ),
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(require_permission(PermissionCode.VMS_VIEW)),
 ):
     logger.debug(
         "Fetching perf metrics for VM '%s' requested by '%s' (window=%s, idle_to_zero=%s, by_disk=%s)",
@@ -119,7 +119,7 @@ def vm_perf_summary(
 @router.get("/vms/{vm_id}", response_model=VMDetail)
 def vm_detail(
     vm_id: str = Path(..., description="ID de la VM"),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission(PermissionCode.VMS_VIEW)),
 ):
     safe_id = vm_id.replace("_", "-")
     logger.debug(

@@ -96,7 +96,7 @@ const normalizeDiskEntries = (disks) => {
 export default function VMDetailModal({ vmId, record = null, onClose, onAction }) {
   const modalRef = useRef(null);
   const perfAbortRef = useRef(null);
-  const { canManagePower } = useAuth();
+  const { hasPermission } = useAuth();
 
   const [loading, setLoading] = useState(!record);
   const [detail, setDetail] = useState(record);
@@ -108,7 +108,7 @@ export default function VMDetailModal({ vmId, record = null, onClose, onAction }
   const [perfError, setPerfError] = useState("");
   const [perf, setPerf] = useState(null);
 
-  const powerDisabled = !canManagePower;
+  const powerDisabled = !hasPermission("vms.power");
   const powerDisabledMessage = "No tienes permisos para controlar energia. Pide acceso a un admin.";
 
   const fetchPerf = useCallback(() => {
@@ -228,8 +228,6 @@ export default function VMDetailModal({ vmId, record = null, onClose, onAction }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [vmId, onClose]);
-
-  if (!vmId) return null;
 
   const handlePerfRefresh = () => {
     fetchPerf();
@@ -362,6 +360,8 @@ export default function VMDetailModal({ vmId, record = null, onClose, onAction }
   const perfIntervalSeconds = perf?._interval_seconds ?? PERF_WINDOW_SECONDS;
   const hasPerfValues = perfMetricsConfig.some(({ key }) => perf && perf[key] != null);
   const showPerfNoDataMessage = !perfLoading && !perfError && !hasPerfValues;
+
+  if (!vmId) return null;
 
   const content = (
     <AnimatePresence>

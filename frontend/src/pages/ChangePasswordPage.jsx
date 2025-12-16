@@ -30,7 +30,7 @@ export default function ChangePasswordPage() {
         old_password: oldPassword,
         new_password: newPassword,
       });
-      applyNewToken(data?.access_token, data?.user, data?.require_password_change);
+      applyNewToken(data?.access_token, data?.user, data?.permissions, data?.require_password_change);
       navigate("/choose", { replace: true });
     } catch (err) {
       const detail = err?.response?.data?.detail || err?.message || "No se pudo cambiar la contraseña.";

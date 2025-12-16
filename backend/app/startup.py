@@ -8,10 +8,17 @@ from dataclasses import dataclass, field
 from typing import List
 
 from fastapi import FastAPI
+from sqlmodel import Session
 
-from app.db import init_db
+from app.db import get_engine, init_db
 from app.notifications.models import Notification  # noqa: F401
+from app.permissions.models import Permission  # noqa: F401
+from app.permissions.service import ensure_default_permissions
 from app.vms import vm_service
+try:
+    from app.main import TEST_MODE
+except Exception:
+    TEST_MODE = False
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +48,9 @@ def register_startup_events(app: FastAPI) -> None:
 
     @app.on_event("startup")
     async def on_startup() -> None:
+        if TEST_MODE:
+            print("[TEST MODE ENABLED] Startup hooks skipped.")
+            return
         diagnostics = StartupDiagnostics()
 
         diagnostics.env_issues = _collect_env_issues()
@@ -56,6 +66,9 @@ def register_startup_events(app: FastAPI) -> None:
                 init_db()
                 diagnostics.db_initialized = True
                 logger.info("Database metadata ensured")
+
+                with Session(get_engine()) as session:
+                    ensure_default_permissions(session)
             except Exception as exc:  # pragma: no cover - defensive
                 diagnostics.errors.append(f"Database init failed: {exc}")
                 logger.exception("Database initialization failed")
@@ -92,6 +105,8 @@ def register_startup_events(app: FastAPI) -> None:
 
     @app.on_event("shutdown")
     async def on_shutdown() -> None:
+        if TEST_MODE:
+            return
         scheduler = getattr(app.state, "notification_scheduler", None)
         if scheduler is not None:
             try:

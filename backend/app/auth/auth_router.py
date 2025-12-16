@@ -7,13 +7,14 @@ from sqlmodel import Session, select
 
 from app.audit.service import log_audit
 from app.auth.jwt_handler import create_access_token
-from app.auth.user_model import User, UserRole
+from app.auth.user_model import User
 from app.db import get_session
 from app.dependencies import (
     AuditRequestContext,
     get_current_user,
     get_request_audit_context,
 )
+from app.permissions.service import user_effective_permissions
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -31,7 +32,6 @@ class TokenUser(BaseModel):
 
     id: int
     username: str
-    role: UserRole
 
 
 class TokenResponse(BaseModel):
@@ -41,6 +41,7 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     user: TokenUser
     require_password_change: bool
+    permissions: list[str]
 
 
 class ChangePasswordRequest(BaseModel):
@@ -50,17 +51,19 @@ class ChangePasswordRequest(BaseModel):
     new_password: str
 
 
-def _build_token_response(user: User) -> TokenResponse:
+def _build_token_response(user: User, session: Session) -> TokenResponse:
+    permissions = sorted(user_effective_permissions(user, session))
     token_payload = {
         "sub": str(user.id),
-        "role": user.role.value if isinstance(user.role, UserRole) else str(user.role),
         "username": user.username,
+        "perms": permissions,
     }
     token = create_access_token(token_payload)
     return TokenResponse(
         access_token=token,
-        user=TokenUser(id=user.id, username=user.username, role=user.role),
+        user=TokenUser(id=user.id, username=user.username),
         require_password_change=user.must_change_password,
+        permissions=permissions,
     )
 
 
@@ -85,16 +88,19 @@ def login(request: LoginRequest, session: Session = Depends(get_session)):
 
     logger.info("Login succeeded for user '%s'", request.username)
 
-    return _build_token_response(user)
+    return _build_token_response(user, session)
 
 
 @router.get("/me")
-def read_me(current_user: User = Depends(get_current_user)):
+def read_me(
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
     return {
         "id": current_user.id,
         "username": current_user.username,
-        "role": current_user.role,
         "must_change_password": current_user.must_change_password,
+        "permissions": sorted(user_effective_permissions(current_user, session)),
     }
 
 
@@ -142,4 +148,4 @@ def change_password(
     session.commit()
     session.refresh(user)
 
-    return _build_token_response(user)
+    return _build_token_response(user, session)

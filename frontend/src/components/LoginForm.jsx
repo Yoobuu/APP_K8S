@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../api/axios";
 import { useAuth } from "../context/AuthContext";
@@ -10,10 +10,62 @@ import { useAuth } from "../context/AuthContext";
  */
 
 const PROVIDERS = [
-  { key: "vcenter", label: "VMware vCenter", tone: "bg-emerald-600", ring: "ring-emerald-500", text: "text-emerald-400" },
-  { key: "hyperv", label: "Microsoft Hyper-V", tone: "bg-blue-600", ring: "ring-blue-500", text: "text-blue-400" },
-  { key: "kvm", label: "KVM / Libvirt", tone: "bg-neutral-800", ring: "ring-neutral-500", text: "text-neutral-300" },
+  {
+    key: "vcenter",
+    label: "VMware vCenter",
+    tone: "bg-emerald-600",
+    ring: "ring-emerald-500",
+    text: "text-emerald-400",
+    colors: ["#064e3b", "#059669", "#34d399"],
+  },
+  {
+    key: "hyperv",
+    label: "Microsoft Hyper-V",
+    tone: "bg-blue-600",
+    ring: "ring-blue-500",
+    text: "text-blue-400",
+    colors: ["#1d4ed8", "#2563eb", "#60a5fa"],
+  },
+  {
+    key: "kvm",
+    label: "KVM / Libvirt",
+    tone: "bg-neutral-800",
+    ring: "ring-neutral-500",
+    text: "text-neutral-300",
+    colors: ["#0f172a", "#1f2937", "#9ca3af"],
+  },
 ];
+
+const DEFAULT_COLORS = ["#0f172a", "#1f2937", "#4b5563"];
+
+function DynamicGradientBackground({ colors, pointer }) {
+  const palette = colors?.length ? colors : DEFAULT_COLORS;
+  const [phase, setPhase] = useState(0);
+
+  useEffect(() => {
+    setPhase(0);
+    const ticker = window.setInterval(() => {
+      setPhase((prev) => (prev + 1) % palette.length);
+    }, 6500);
+    return () => window.clearInterval(ticker);
+  }, [palette]);
+
+  const colorA = palette[phase % palette.length];
+  const colorB = palette[(phase + 1) % palette.length];
+  const colorC = palette[(phase + 2) % palette.length];
+
+  const backgroundStyle = {
+    background: `radial-gradient(circle at ${pointer.x}% ${pointer.y}%, ${colorA} 0%, ${colorB} 45%, ${colorC} 100%)`,
+  };
+
+  return (
+    <div
+      className="pointer-events-none fixed inset-0 transition-all duration-500 ease-linear"
+      style={backgroundStyle}
+      aria-hidden
+    />
+  );
+}
 
 export default function LoginRedesign() {
   const [provider, setProvider] = useState("vcenter");
@@ -24,6 +76,10 @@ export default function LoginRedesign() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [caps, setCaps] = useState(false);
+  const [pointer, setPointer] = useState({ x: 50, y: 50 });
+  const manualRef = useRef(false);
+  const idleTimeoutRef = useRef(null);
+  const rafRef = useRef(null);
 
   const navigate = useNavigate();
   const { login } = useAuth();
@@ -39,6 +95,67 @@ export default function LoginRedesign() {
     };
   }, []);
 
+  useEffect(() => {
+    let start = performance.now();
+    const animate = (now) => {
+      const elapsed = (now - start) / 1000;
+      if (!manualRef.current) {
+        const nextX = 50 + Math.sin(elapsed * 0.35) * 22;
+        const nextY = 50 + Math.cos(elapsed * 0.45 + Math.PI / 4) * 18;
+        setPointer((prev) => {
+          if (Math.abs(prev.x - nextX) > 0.1 || Math.abs(prev.y - nextY) > 0.1) {
+            return { x: nextX, y: nextY };
+          }
+          return prev;
+        });
+      }
+      rafRef.current = requestAnimationFrame(animate);
+    };
+    rafRef.current = requestAnimationFrame(animate);
+    return () => {
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (idleTimeoutRef.current) {
+        clearTimeout(idleTimeoutRef.current);
+      }
+      manualRef.current = false;
+    };
+  }, []);
+
+  const handlePointerMove = (event) => {
+    manualRef.current = true;
+    if (idleTimeoutRef.current) {
+      clearTimeout(idleTimeoutRef.current);
+    }
+
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const x = ((event.clientX - bounds.left) / bounds.width) * 100;
+    const y = ((event.clientY - bounds.top) / bounds.height) * 100;
+    setPointer({
+      x: Math.min(100, Math.max(0, x)),
+      y: Math.min(100, Math.max(0, y)),
+    });
+
+    idleTimeoutRef.current = window.setTimeout(() => {
+      manualRef.current = false;
+    }, 1600);
+  };
+
+  const handlePointerLeave = () => {
+    if (idleTimeoutRef.current) {
+      clearTimeout(idleTimeoutRef.current);
+      idleTimeoutRef.current = null;
+    }
+    manualRef.current = false;
+    setPointer({ x: 50, y: 50 });
+  };
+
   const handleSubmit = async (event) => {
     event.preventDefault();
     setError("");
@@ -49,10 +166,11 @@ export default function LoginRedesign() {
         access_token: accessToken,
         user,
         require_password_change: requirePasswordChange,
+        permissions,
       } = res?.data || {};
 
       if (accessToken) {
-        login({ token: accessToken, user, requirePasswordChange });
+        login({ token: accessToken, user, permissions, requirePasswordChange });
       }
 
       if (remember) {
@@ -83,7 +201,13 @@ export default function LoginRedesign() {
   const accentSoft = `ring-1 ${theme.ring} ${theme.text}`;
 
   return (
-    <div className="min-h-dvh w-full bg-black text-white relative">
+    <div
+      className="min-h-dvh w-full bg-gray-950 text-white relative overflow-hidden"
+      onPointerMove={handlePointerMove}
+      onPointerLeave={handlePointerLeave}
+    >
+      <DynamicGradientBackground colors={theme.colors} pointer={pointer} />
+
       {/* Fondo en cuadrícula */}
       <div className="pointer-events-none fixed inset-0 opacity-20" aria-hidden>
         <svg className="h-full w-full" xmlns="http://www.w3.org/2000/svg">
@@ -97,14 +221,14 @@ export default function LoginRedesign() {
       </div>
 
       {/* Card centrada */}
-      <div className="relative flex min-h-dvh items-center justify-center px-4 sm:px-6">
+      <div className="relative z-10 flex min-h-dvh items-center justify-center px-4 sm:px-6">
         <div className="w-full max-w-xl rounded-3xl border border-white/10 bg-neutral-900/60 p-6 shadow-2xl backdrop-blur">
           {/* Header */}
           <div className="mb-6 flex items-center gap-3">
             <div className={`h-9 w-9 rounded-xl ${theme.tone}`} />
             <div>
-              <h1 className="text-xl font-semibold leading-5">Accede al Iventario</h1>
-              <p className="text-xs text-neutral-400">Autenticate para acceder </p>
+              <h1 className="text-xl font-semibold leading-5">Accede al inventario</h1>
+              <div className="text-sm text-neutral-400">Introduce tus credenciales para continuar</div>
             </div>
           </div>
 
@@ -174,9 +298,12 @@ export default function LoginRedesign() {
                 />
                 Recordarme en este equipo
               </label>
-              <a className={`underline-offset-4 hover:underline ${accentSoft}`} href="#">
-                ¿Olvidaste tu contraseña?
-              </a>
+              <div className={`text-right ${accentSoft}`}>
+                <p className="leading-snug">
+                  ¿Olvidaste tu contraseña? <br className="hidden sm:block" />
+                  Contacta al encargado del sistema para restablecerla.
+                </p>
+              </div>
             </div>
 
             {error && (

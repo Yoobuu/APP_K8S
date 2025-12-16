@@ -7,6 +7,11 @@ from dataclasses import dataclass
 import winrm  # pywinrm en requirements
 from requests.exceptions import RequestException
 
+try:
+    from app.main import TEST_MODE
+except Exception:
+    TEST_MODE = False
+
 logger = logging.getLogger("hyperv.remote")
 
 
@@ -31,11 +36,38 @@ class RemoteCreds:
 PS_SCRIPT_BASENAME = "collect_hyperv_inventory.ps1"
 
 
-def _run_local_powershell(ps_path: str, hvhost: str, timeout: int) -> str:
+def _run_local_powershell(
+    ps_path: str,
+    hvhost: str,
+    level: str,
+    timeout: int,
+    vm_name: str | None,
+    skip_vhd: bool,
+    skip_measure: bool,
+    skip_kvp: bool,
+) -> str:
     args = [
-        "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
-        "-File", ps_path, "-HVHost", hvhost
+        "powershell",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        ps_path,
+        "-HVHost",
+        hvhost,
+        "-Level",
+        level,
     ]
+    if vm_name:
+        args.extend(["-VMName", vm_name])
+    # For switch parameters, pass the flag only when True to avoid PS
+    # interpreting string values and failing conversion.
+    if skip_vhd:
+        args.append("-SkipVhd")
+    if skip_measure:
+        args.append("-SkipMeasure")
+    if skip_kvp:
+        args.append("-SkipKvp")
     result = subprocess.run(
         args,
         capture_output=True,
@@ -140,7 +172,16 @@ def _read_remote_text(session: winrm.Session, ps: str) -> str:
     return _decode_bytes(r.std_out).strip()
 
 
-def _run_winrm_inline(creds: RemoteCreds, ps_content: str, hvhost: str) -> str:
+def _run_winrm_inline(
+    creds: RemoteCreds,
+    ps_content: str,
+    hvhost: str,
+    level: str,
+    vm_name: str | None,
+    skip_vhd: bool,
+    skip_measure: bool,
+    skip_kvp: bool,
+) -> str:
     """
     Sube el script al host remoto en chunks, lo ejecuta y devuelve stdout (texto).
     Si stdout sale vacAo, aquA NO se lee archivo: eso lo maneja run_inventory().
@@ -192,9 +233,21 @@ $txt=[Text.Encoding]::UTF8.GetString($bytes);
             raise RuntimeError(f"WinRM append chunk error: {err[:500]}")
 
     # 3) ejecutar
+    vm_arg = ""
+    if vm_name:
+        escaped_vm = vm_name.replace("'", "''")
+        vm_arg = f"-VMName '{escaped_vm}'"
+    flag_args = []
+    if skip_vhd:
+        flag_args.append("-SkipVhd")
+    if skip_measure:
+        flag_args.append("-SkipMeasure")
+    if skip_kvp:
+        flag_args.append("-SkipKvp")
+    flags_str = " ".join(flag_args)
     run_cmd = rf"""
 $fname='{remote_file_name}';$p=Join-Path $env:TEMP $fname;
-& powershell -NoProfile -ExecutionPolicy Bypass -File $p -HVHost '{hvhost}'
+& powershell -NoProfile -ExecutionPolicy Bypass -File $p -HVHost '{hvhost}' -Level '{level}' {vm_arg} {flags_str}
 """
     r = session.run_ps(run_cmd)
 
@@ -218,20 +271,42 @@ Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue
 def run_inventory(
     creds: RemoteCreds,
     ps_content: Optional[str] = None,
-    ps_path_local: Optional[str] = None
+    ps_path_local: Optional[str] = None,
+    *,
+    level: str = "summary",
+    vm_name: Optional[str] = None,
+    skip_vhd: Optional[bool] = None,
+    skip_measure: Optional[bool] = None,
+    skip_kvp: Optional[bool] = None,
 ) -> List[dict]:
     """
     Ejecuta collect_hyperv_inventory en el host remoto (WinRM) o localmente.
-    Retorna una lista de dicts (cada VM).
+    Retorna una lista de dicts (cada VM) con el nivel indicado.
     """
+    if TEST_MODE:
+        return [{"test_mode": True, "results": []}]
     last_err = None
+    level_norm = (level or "summary").lower()
+    sv = skip_vhd if skip_vhd is not None else level_norm == "summary"
+    sm = skip_measure if skip_measure is not None else level_norm == "summary"
+    sk = skip_kvp if skip_kvp is not None else level_norm == "summary"
+
     for attempt in range(creds.retries + 1):
         try:
             # 1) ejecutar
             if creds.use_winrm:
                 if ps_content is None:
                     raise ValueError("ps_content requerido para WinRM inline")
-                raw = _run_winrm_inline(creds, ps_content, hvhost=creds.host)
+                raw = _run_winrm_inline(
+                    creds,
+                    ps_content,
+                    hvhost=creds.host,
+                    level=level_norm,
+                    vm_name=vm_name,
+                    skip_vhd=sv,
+                    skip_measure=sm,
+                    skip_kvp=sk,
+                )
             else:
                 if not ps_path_local:
                     if ps_content is None:
@@ -239,7 +314,16 @@ def run_inventory(
                     with tempfile.NamedTemporaryFile("w", suffix=".ps1", delete=False) as fh:
                         fh.write(ps_content)
                         ps_path_local = fh.name
-                raw = _run_local_powershell(ps_path_local, hvhost=creds.host, timeout=creds.read_timeout)
+                raw = _run_local_powershell(
+                    ps_path_local,
+                    hvhost=creds.host,
+                    level=level_norm,
+                    timeout=creds.read_timeout,
+                    vm_name=vm_name,
+                    skip_vhd=sv,
+                    skip_measure=sm,
+                    skip_kvp=sk,
+                )
 
             raw = (raw or "").strip()
 
@@ -343,6 +427,9 @@ try {{
     exit 1
 }}
 """.strip()
+
+    if TEST_MODE:
+        return (False, "WinRM disabled in test mode")
 
     try:
         endpoint = f"{creds.scheme}://{creds.host}:{creds.port}/wsman"

@@ -50,7 +50,7 @@ export default function AuditPage() {
   const formatDate = (value) => {
     try {
       return value ? new Date(value).toLocaleString() : "";
-    } catch (err) {
+    } catch {
       return value || "";
     }
   };

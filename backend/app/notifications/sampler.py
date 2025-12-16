@@ -11,6 +11,10 @@ from app.providers.hyperv.schema import DiskInfo, VMRecord
 from app.vms.hyperv_router import _load_ps_content, _parse_hosts_env
 from app.vms.hyperv_service import collect_hyperv_inventory_for_host
 from app.vms.vm_service import fetch_vmware_snapshot
+try:
+    from app.main import TEST_MODE
+except Exception:
+    TEST_MODE = False
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +85,8 @@ def _collect_hyperv_for_host(host: str, refresh: bool, ps_content: str, observed
 
 
 def collect_hyperv_samples(refresh: bool) -> List[VmSample]:
+    if TEST_MODE:
+        return []
     hosts_env = os.environ.get("HYPERV_HOSTS")
     host_list = _parse_hosts_env(hosts_env) if hosts_env else []
     if not host_list:
@@ -112,6 +118,8 @@ def collect_hyperv_samples(refresh: bool) -> List[VmSample]:
 
 
 def collect_vmware_samples(refresh: bool) -> List[VmSample]:
+    if TEST_MODE:
+        return []
     try:
         snapshots = fetch_vmware_snapshot(refresh=refresh)
     except Exception as exc:

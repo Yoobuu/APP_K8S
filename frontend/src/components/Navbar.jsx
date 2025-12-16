@@ -1,59 +1,57 @@
-import { Link, useNavigate } from "react-router-dom";
+import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 
 export default function Navbar() {
   const navigate = useNavigate();
-  const { user, logout, isSuperadmin } = useAuth();
+  const location = useLocation();
+  const { user, logout, hasPermission } = useAuth();
 
   const handleLogout = () => {
     logout();
     navigate("/login", { replace: true });
   };
 
+  const links = [];
+  if (hasPermission("vms.view") || hasPermission("hyperv.view") || hasPermission("cedia.view")) {
+    links.push({ to: "/choose", label: "Inventarios" });
+  }
+  if (hasPermission("notifications.view")) links.push({ to: "/notifications", label: "Notificaciones" });
+  if (hasPermission("audit.view")) links.push({ to: "/audit", label: "Auditoría" });
+  if (hasPermission("users.manage")) links.push({ to: "/users", label: "Usuarios" });
+
   return (
-    <nav className="sticky top-0 z-50 w-full border-b border-white/10 bg-neutral-900/80 backdrop-blur text-white">
-      <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-4 py-3">
+    <nav className="sticky top-0 z-50 w-full border-b border-white/10 bg-neutral-950/80 backdrop-blur text-white">
+      <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-3">
         <div className="flex items-center gap-3">
-          <Link
-            to="/choose"
-            className="rounded-xl bg-blue-600/90 px-4 py-2 text-sm font-medium shadow transition hover:bg-blue-500/90"
-          >
-            ← Inventarios
-          </Link>
-          {isSuperadmin && (
-            <>
-              <Link
-                to="/users"
-                className="rounded-xl bg-emerald-600/90 px-4 py-2 text-sm font-medium shadow transition hover:bg-emerald-500/90"
+          <div className="rounded-xl bg-white/10 px-3 py-1 text-sm font-semibold text-white">Inventario DC</div>
+          <div className="hidden h-6 w-px bg-white/10 sm:block" />
+          <div className="flex flex-wrap items-center gap-2">
+            {links.map((link) => (
+              <NavLink
+                key={link.to}
+                to={link.to}
+                className={({ isActive }) => {
+                  const isCurrent =
+                    isActive || (link.to !== "/" && location.pathname.startsWith(link.to));
+                  return [
+                    "rounded-lg px-3 py-1.5 text-xs font-medium transition sm:text-sm",
+                    isCurrent
+                      ? "bg-white text-neutral-900 shadow"
+                      : "bg-white/5 text-neutral-200 hover:bg-white/10",
+                  ].join(" ");
+                }}
               >
-                Usuarios
-              </Link>
-              <Link
-                to="/notifications"
-                className="rounded-xl bg-indigo-600/90 px-4 py-2 text-sm font-medium shadow transition hover:bg-indigo-500/90"
-              >
-                Notificaciones
-              </Link>
-              <Link
-                to="/audit"
-                className="rounded-xl bg-purple-600/90 px-4 py-2 text-sm font-medium shadow transition hover:bg-purple-500/90"
-              >
-                Auditoría
-              </Link>
-            </>
-          )}
+                {link.label}
+              </NavLink>
+            ))}
+          </div>
         </div>
 
-        <div className="flex items-center gap-4 text-sm">
-          {user && (
-            <div className="text-right text-xs sm:text-sm">
-              <div className="font-medium text-white">{user.username}</div>
-              <div className="text-neutral-300">{user.role}</div>
-            </div>
-          )}
+        <div className="flex items-center gap-3 text-sm">
+          {user && <div className="text-xs font-medium text-white sm:text-sm">{user.username}</div>}
           <button
             onClick={handleLogout}
-            className="rounded-xl bg-red-600/90 px-4 py-2 text-sm font-medium shadow transition hover:bg-red-500/90"
+            className="rounded-lg bg-white/10 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-white/20 sm:text-sm"
           >
             Cerrar sesión
           </button>

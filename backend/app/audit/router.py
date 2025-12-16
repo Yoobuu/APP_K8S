@@ -9,7 +9,8 @@ from sqlmodel import Session, SQLModel, select
 
 from app.audit.models import AuditLog
 from app.db import get_session
-from app.dependencies import require_superadmin
+from app.dependencies import require_permission
+from app.permissions.models import PermissionCode
 
 router = APIRouter(prefix="/api/audit", tags=["audit"])
 
@@ -48,7 +49,11 @@ def _apply_filters(statement: Select[AuditLog], *, action: Optional[str], target
     return statement
 
 
-@router.get("/", response_model=AuditLogListResponse, dependencies=[Depends(require_superadmin)])
+@router.get(
+    "/",
+    response_model=AuditLogListResponse,
+    dependencies=[Depends(require_permission(PermissionCode.AUDIT_VIEW))],
+)
 def list_audit_logs(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),

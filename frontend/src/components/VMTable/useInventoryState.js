@@ -48,16 +48,33 @@ const DEFAULT_FILTERS = {
   host: '',
   cluster: '',
   vlan: '',
+  connection_state: '',
+  version: '',
+  vendor: '',
+  model: '',
+  health: '',
+  server_type: '',
 }
 
 const GROUPERS = {
-  none: () => '',
-  estado: (vm) => vm.power_state || 'Sin estado',
-  ambiente: (vm) => vm.environment || 'Sin ambiente',
-  host: (vm) => vm.host || 'Sin Host',
-  vlan: (vm) => (vm.vlans?.length ? vm.vlans.join(', ') : 'Sin VLAN'),
-  cluster: (vm) => vm.cluster || 'Sin Cluster',
-  SO: (vm) => vm.guest_os || 'Sin SO',
+  default: {
+    none: () => '',
+    estado: (vm) => vm.power_state || 'Sin estado',
+    ambiente: (vm) => vm.environment || 'Sin ambiente',
+    host: (vm) => vm.host || 'Sin Host',
+    vlan: (vm) => (vm.vlans?.length ? vm.vlans.join(', ') : 'Sin VLAN'),
+    cluster: (vm) => vm.cluster || 'Sin Cluster',
+    SO: (vm) => vm.guest_os || 'Sin SO',
+  },
+  hosts: {
+    none: () => '',
+    cluster: (host) => host.cluster || 'Sin Cluster',
+    estado: (host) => host.connection_state || host.power_state || 'Sin estado',
+    version: (host) => host.version || 'Sin versión',
+    vendor: (host) => host.vendor || 'Sin vendor',
+    health: (host) => host.health || 'Sin health',
+    tipo: (host) => host.server_type || 'Sin tipo',
+  },
 }
 
 const parseSortableNumber = (value) => {
@@ -91,6 +108,9 @@ const defaultFetch = async ({ provider, refresh } = {}) => {
       return Object.values(data.results).flat()
     }
     return []
+  } else if (provider === 'hosts') {
+    const { data } = await api.get('/hosts', { params })
+    return Array.isArray(data) ? data : data.results || []
   } else {
     const { data } = await api.get('/vms', { params })
     return Array.isArray(data) ? data : data.results || []
@@ -315,6 +335,13 @@ export function useInventoryState(options = {}) {
     filter.cluster,
     filter.vlan,
     filter.name,
+    filter.connection_state,
+    filter.version,
+    filter.vendor,
+    filter.model,
+    filter.health,
+    filter.server_type,
+    filter,
   ])
 
   const handlePowerChange = useCallback((id, newState) => {
@@ -351,6 +378,26 @@ export function useInventoryState(options = {}) {
 
   const uniqueClusters = useMemo(
     () => Array.from(new Set(vms.map((vm) => vm.cluster).filter(Boolean))).sort(),
+    [vms]
+  )
+
+  const uniqueConnectionStates = useMemo(
+    () => Array.from(new Set(vms.map((vm) => vm.connection_state).filter(Boolean))).sort(),
+    [vms]
+  )
+
+  const uniqueVersions = useMemo(
+    () => Array.from(new Set(vms.map((vm) => vm.version).filter(Boolean))).sort(),
+    [vms]
+  )
+
+  const uniqueVendors = useMemo(
+    () => Array.from(new Set(vms.map((vm) => vm.vendor).filter(Boolean))).sort(),
+    [vms]
+  )
+
+  const uniqueModels = useMemo(
+    () => Array.from(new Set(vms.map((vm) => vm.model).filter(Boolean))).sort(),
     [vms]
   )
 
@@ -411,6 +458,24 @@ export function useInventoryState(options = {}) {
       const wanted = String(filter.vlan)
       arr = arr.filter((vm) => vm.vlans?.some((vlan) => String(vlan) === wanted))
     }
+    if (filter.connection_state) {
+      arr = arr.filter((vm) => vm.connection_state === filter.connection_state)
+    }
+    if (filter.version) {
+      arr = arr.filter((vm) => vm.version === filter.version)
+    }
+    if (filter.vendor) {
+      arr = arr.filter((vm) => vm.vendor === filter.vendor)
+    }
+    if (filter.model) {
+      arr = arr.filter((vm) => vm.model === filter.model)
+    }
+    if (filter.health) {
+      arr = arr.filter((vm) => vm.health === filter.health)
+    }
+    if (filter.server_type) {
+      arr = arr.filter((vm) => vm.server_type === filter.server_type)
+    }
 
     arr.sort((a, b) => {
       const { key, asc } = sortBy
@@ -440,15 +505,8 @@ export function useInventoryState(options = {}) {
   }, [vms, debouncedSearch, filter, sortBy])
 
   const groups = useMemo(() => {
-    const grouper = {
-      none: () => '',
-      estado: (vm) => vm.power_state || 'Sin estado',
-      ambiente: (vm) => vm.environment || 'Sin ambiente',
-      host: (vm) => vm.host || 'Sin Host',
-      vlan: (vm) => (vm.vlans?.length ? vm.vlans.join(', ') : 'Sin VLAN'),
-      cluster: (vm) => vm.cluster || 'Sin Cluster',
-      SO: (vm) => vm.guest_os || 'Sin SO',
-    }[groupByOption] ?? (() => '')
+    const groupersMap = providerKey === 'hosts' ? GROUPERS.hosts : GROUPERS.default
+    const grouper = groupersMap[groupByOption] ?? (() => '')
 
     return processed.reduce((acc, vm) => {
       const key = grouper(vm) || ''
@@ -460,7 +518,7 @@ export function useInventoryState(options = {}) {
       acc[key].push(row)
       return acc
     }, {})
-  }, [processed, groupByOption])
+  }, [processed, groupByOption, providerKey])
 
   console.log('[render state] vms.length =', vms.length, 'processed.length =', processed.length, 'group keys =', Object.keys(groups))
 
@@ -481,7 +539,13 @@ export function useInventoryState(options = {}) {
           filter.host ||
           filter.cluster ||
           filter.vlan ||
-          filter.name
+          filter.name ||
+          filter.connection_state ||
+          filter.version ||
+          filter.vendor ||
+          filter.model ||
+          filter.health ||
+          filter.server_type
       ),
     [
       debouncedSearch,
@@ -492,6 +556,12 @@ export function useInventoryState(options = {}) {
       filter.cluster,
       filter.vlan,
       filter.name,
+      filter.connection_state,
+      filter.version,
+      filter.vendor,
+      filter.model,
+      filter.health,
+      filter.server_type,
     ]
   )
 
@@ -537,6 +607,10 @@ export function useInventoryState(options = {}) {
     uniqueGuestOS,
     uniqueHosts,
     uniqueClusters,
+    uniqueConnectionStates,
+    uniqueVersions,
+    uniqueVendors,
+    uniqueModels,
     uniqueVlans,
     processed,
     groups,

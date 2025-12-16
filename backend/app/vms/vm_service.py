@@ -19,6 +19,10 @@ from pyVmomi import vim  # vSphere SDK types
 
 from app.config import VCENTER_HOST, VCENTER_PASS, VCENTER_USER
 from app.vms.vm_models import VMBase, VMDetail
+try:
+    from app.main import TEST_MODE
+except Exception:
+    TEST_MODE = False
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +100,8 @@ def reset_caches() -> None:
 
 def _resolve_vcenter_settings() -> Dict[str, Optional[str]]:
     """Fetch vCenter configuration from environment, preserving current behaviour."""
+    if TEST_MODE:
+        return {"host": None, "user": None, "password": None, "soap_host": None, "test_mode": True}
     host = os.getenv("VCENTER_HOST", VCENTER_HOST)
     user = os.getenv("VCENTER_USER", VCENTER_USER)
     password = os.getenv("VCENTER_PASS", VCENTER_PASS)
@@ -110,6 +116,8 @@ def _resolve_vcenter_settings() -> Dict[str, Optional[str]]:
 
 def validate_vcenter_configuration() -> List[str]:
     """Return a list of issues if essential vCenter credentials are missing."""
+    if TEST_MODE:
+        return []
     settings = _resolve_vcenter_settings()
     issues: List[str] = []
 
@@ -135,6 +143,8 @@ def _soap_connect():
     Crea una conexión no verificada al vCenter via pyVmomi
     y devuelve el ServiceInstance y su Content.
     """
+    if TEST_MODE:
+        return None, None
     settings = _resolve_vcenter_settings()
     if not settings["soap_host"] or not settings["user"] or not settings["password"]:
         raise RuntimeError("Incomplete vCenter SOAP configuration")
@@ -152,6 +162,8 @@ def _soap_connect():
 
 def _build_placement_map() -> Dict[str, PlacementInfo]:
     """Load host/cluster and quickstat information for all VMs in a single SOAP pass."""
+    if TEST_MODE:
+        return {}
     results: Dict[str, PlacementInfo] = {}
     try:
         si, content = _soap_connect()
@@ -286,6 +298,24 @@ def get_session_token() -> str:
         logger.exception("Failed to obtain vCenter session token")
         code = getattr(exc, "response", None) and exc.response.status_code or 500
         raise HTTPException(status_code=code, detail=f"Auth failed: {exc}")
+
+
+def get_hosts_raw() -> dict:
+    """
+    Recupera la respuesta cruda del endpoint REST /rest/vcenter/host.
+    No aplica transformaciones ni filtrados; reutiliza la sesión actual.
+    """
+    token = get_session_token()
+    headers = {"vmware-api-session-id": token}
+
+    response = requests.get(
+        _network_endpoint("/rest/vcenter/host"),
+        headers=headers,
+        verify=False,
+        timeout=10,
+    )
+    response.raise_for_status()
+    return response.json()
 
 
 def infer_environment(name: str) -> str:

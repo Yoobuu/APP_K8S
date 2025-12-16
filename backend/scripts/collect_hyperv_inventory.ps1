@@ -1,6 +1,11 @@
 # backend/scripts/collect_hyperv_inventory.ps1
 param(
-    [Parameter(Mandatory=$true)][string]$HVHost
+    [Parameter(Mandatory=$true)][string]$HVHost,
+    [ValidateSet('summary','detail','deep')][string]$Level = 'summary',
+    [string]$VMName = $null,
+    [switch]$SkipVhd,
+    [switch]$SkipMeasure,
+    [switch]$SkipKvp
 )
 
 $ErrorActionPreference = 'Stop'
@@ -8,6 +13,89 @@ $ProgressPreference    = 'SilentlyContinue'
 
 Import-Module Hyper-V -ErrorAction Stop
 Import-Module FailoverClusters -ErrorAction SilentlyContinue
+
+# Defaults by level (switches win if explicitly passed)
+if ($Level -eq 'summary') {
+  $SkipVhd = $true
+  $SkipMeasure = $true
+  $SkipKvp = $true
+}
+elseif ($Level -eq 'detail') {
+  # Allow overrides via switches
+  if (-not $PSBoundParameters.ContainsKey('SkipVhd')) { $SkipVhd = $false }
+  if (-not $PSBoundParameters.ContainsKey('SkipMeasure')) { $SkipMeasure = $false }
+  if (-not $PSBoundParameters.ContainsKey('SkipKvp')) { $SkipKvp = $false }
+}
+else { # deep
+  $SkipVhd = $false
+  $SkipMeasure = $false
+  $SkipKvp = $false
+}
+
+$DoVhd = -not $SkipVhd
+$DoMeasure = -not $SkipMeasure
+$DoKvp = -not $SkipKvp
+
+# Datos de host/switch para deep
+$globalSwitches = @()
+if ($Level -eq 'deep') {
+  try { $globalSwitches = Get-VMSwitch | Select-Object Name, Notes, SwitchType, NetAdapterInterfaceDescription } catch {}
+}
+
+$globalHostInfo = $null
+if ($Level -eq 'deep') {
+  try {
+    $vmHost = Get-VMHost -ComputerName $HVHost -ErrorAction SilentlyContinue | Select-Object Name, LogicalProcessorCount, MemoryCapacity, VirtualMachineMigrationEnabled, Version
+    # Uptime y uso CPU/Mem
+    $uptimeSec = $null; $cpuHostPct = $null; $memHostPct = $null
+    try {
+      $os = Get-CimInstance -ClassName Win32_OperatingSystem -ComputerName $HVHost -ErrorAction Stop
+      if ($os) {
+        $uptimeSec = [int](([DateTime]::UtcNow) - $os.LastBootUpTime.ToUniversalTime()).TotalSeconds
+        $memTotal = [int64]$os.TotalVisibleMemorySize * 1024
+        $memFree  = [int64]$os.FreePhysicalMemory * 1024
+        if ($memTotal -gt 0) { $memHostPct = [math]::Round((($memTotal - $memFree) / $memTotal) * 100, 2) }
+      }
+    } catch {}
+    try {
+      $cpuHostPct = [math]::Round((Get-Counter -Counter '\Processor(_Total)\% Processor Time').CounterSamples[0].CookedValue, 2)
+    } catch {}
+
+    # NICs físicas
+    $nics = @()
+    try {
+      $nics = Get-NetAdapter -ErrorAction Stop | Select-Object Name, InterfaceDescription, MacAddress, Status, LinkSpeed
+    } catch {}
+
+    # Storage físico (si aplica)
+    $storage = @()
+    try {
+      $storage = Get-PhysicalDisk -ErrorAction Stop | Select-Object FriendlyName, Size, MediaType, HealthStatus, OperationalStatus
+    } catch {}
+
+    $globalHostInfo = [pscustomobject]@{
+      Name                          = $vmHost.Name
+      LogicalProcessorCount         = $vmHost.LogicalProcessorCount
+      MemoryCapacity                = $vmHost.MemoryCapacity
+      VirtualMachineMigrationEnabled = $vmHost.VirtualMachineMigrationEnabled
+      Version                       = $vmHost.Version
+      UptimeSeconds                 = $uptimeSec
+      CpuUsagePct                   = $cpuHostPct
+      MemUsagePct                   = $memHostPct
+      Nics                          = $nics
+      Storage                       = $storage
+    }
+  } catch {}
+}
+
+$scvmmStorage = $null
+if ($Level -eq 'deep') {
+  try {
+    if (Get-Command Get-SCStoragePool -ErrorAction SilentlyContinue) {
+      $scvmmStorage = Get-SCStoragePool -ErrorAction SilentlyContinue | Select-Object Name, CapacityGB, FreeSpaceGB, HealthStatus
+    }
+  } catch {}
+}
 
 # --- Cluster (opcional si existe) ---
 $clusterName = $null; $vmOwnerMap = @{}
@@ -21,6 +109,7 @@ try {
 # --- SO desde KVP (local) ---
 function Get-HVGuestOSFromKVP {
   param([Microsoft.HyperV.PowerShell.VirtualMachine]$VM)
+  if (-not $DoKvp) { return $null }
   try {
     $vmGuid = $VM.VMId.Guid
     $cs = Get-CimInstance -Namespace root\virtualization\v2 `
@@ -43,6 +132,7 @@ function Get-HVGuestOSFromKVP {
 }
 
 function Get-Disks($vm) {
+  if (-not $DoVhd) { return @() }
   $diskObjs=@()
   try {
     foreach($hdd in (Get-VMHardDiskDrive -VM $vm)){
@@ -63,7 +153,7 @@ function Get-Disks($vm) {
 }
 
 function Get-NICInfo($vm) {
-  $vlanIds=@(); $ipList=@()
+  $vlanIds=@(); $ipList=@(); $networks=@()
   try {
     $nics=Get-VMNetworkAdapter -VM $vm
     foreach ($nic in $nics) {
@@ -77,11 +167,13 @@ function Get-NICInfo($vm) {
       if ($nic.IPAddresses){
         $ipList += $nic.IPAddresses | Where-Object { $_ -match '^\d{1,3}(\.\d{1,3}){3}$' }
       }
+      if ($nic.SwitchName) { $networks += $nic.SwitchName }
     }
   } catch {}
   if ($vlanIds.Count -gt 0){$vlanIds=$vlanIds|Sort-Object -Unique}else{$vlanIds=@()}
   if ($ipList.Count  -eq 0){$ipList=@()}
-  return @{ VLANs = $vlanIds; IPv4 = $ipList }
+  if ($networks.Count -gt 0){$networks=$networks|Sort-Object -Unique}else{$networks=@()}
+  return @{ VLANs = $vlanIds; IPv4 = $ipList; Networks = $networks }
 }
 
 function Get-OneVM {
@@ -91,10 +183,14 @@ function Get-OneVM {
   $vCPU = $null; try { $vCPU = (Get-VMProcessor -VM $VM).Count } catch {}
   $cpuUsagePct = $null
   try { $cpuUsagePct = $VM.CPUUsage } catch {}
-  if ($cpuUsagePct -eq $null -or $cpuUsagePct -eq 0) {
+  $measureDetail = $null
+  if ($DoMeasure -and ($cpuUsagePct -eq $null -or $cpuUsagePct -eq 0 -or $Level -eq 'deep')) {
     try {
       $m = Measure-VM -ComputerName $HVHost -VMName $VM.Name -ErrorAction Stop
       if ($m.Processor.Average) { $cpuUsagePct = [math]::Round($m.Processor.Average,2) }
+      if ($Level -eq 'deep') {
+        $measureDetail = @{ Processor = $m.Processor; Memory = $m.Memory; Network = $m.NetworkAdapter; Disk = $m.Disk }
+      }
     } catch {}
   }
 
@@ -125,6 +221,12 @@ function Get-OneVM {
   # Discos
   $disks = Get-Disks -vm $VM
 
+  # Checkpoints (deep)
+  $checkpoints = @()
+  if ($Level -eq 'deep') {
+    try { $checkpoints = Get-VMSnapshot -VMName $VM.Name -ErrorAction SilentlyContinue | Select-Object Name, CreationTime, IsPaused, IsOffline, ParentSnapshotId } catch {}
+  }
+
   # → SALIDA en el **esquema objetivo (inglés)** para no tocar schema.py
   [pscustomobject]@{
     HVHost         = $HVHost
@@ -139,15 +241,28 @@ function Get-OneVM {
     Cluster        = $cluster
     VLAN_IDs       = @($nicInfo.VLANs)
     IPv4           = @($nicInfo.IPv4)
+    Networks       = @($nicInfo.Networks)
     CompatHW       = @{ Version = $ver; Generation = $gen }
     Disks          = $disks
+    OwnerNode      = $vmOwnerMap[$VM.Name]
+    MeasureVM      = $measureDetail
+    Switches       = $globalSwitches
+    HostInfo       = $globalHostInfo
+    Checkpoints    = $checkpoints
+    SCVMMStorage   = $scvmmStorage
   }
 }
 
 # --- Recoger inventario del host indicado ---
 $items = @()
 try {
-  $vms = Get-VM -ComputerName $HVHost -ErrorAction Stop
+  $vmFilter = $null
+  if ($VMName) { $vmFilter = $VMName -split ',' }
+  if ($vmFilter) {
+    $vms = Get-VM -ComputerName $HVHost -Name $vmFilter -ErrorAction Stop
+  } else {
+    $vms = Get-VM -ComputerName $HVHost -ErrorAction Stop
+  }
   foreach ($vm in $vms) { $items += Get-OneVM -HVHost $HVHost -VM $vm }
 } catch {
   Write-Warning "Get-VM en $HVHost falló: $($_.Exception.Message)"

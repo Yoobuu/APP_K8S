@@ -1,15 +1,19 @@
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import ChooseInventory from "./components/ChooseInventory";
 import LoginForm from "./components/LoginForm";
-import Navbar from "./components/Navbar";
 import HyperVPage from "./components/HyperVPage";
 import KVMPage from "./components/KVMPage";
 import VMTable from "./components/VMTable";
+import HostTable from "./components/HostTable";
+import AppLayout from "./components/AppLayout";
+import AccessDenied from "./components/AccessDenied";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import ChangePasswordPage from "./pages/ChangePasswordPage";
 import UserAdminPage from "./pages/UserAdminPage";
 import AuditPage from "./pages/AuditPage";
 import NotificationsPage from "./pages/NotificationsPage";
+import HyperVHostsPage from "./components/HyperVHostsPage";
+import CediaPage from "./components/CediaPage";
 
 export default function App() {
   return (
@@ -22,9 +26,15 @@ export default function App() {
 }
 
 function AppRoutes() {
-  const { token, mustChangePassword, isSuperadmin } = useAuth();
+  const { token, mustChangePassword, hasPermission } = useAuth();
   const isAuthenticated = Boolean(token);
   const enforcePasswordChange = isAuthenticated && mustChangePassword;
+  const canViewVmware = hasPermission("vms.view");
+  const canViewHyperv = hasPermission("hyperv.view");
+  const canViewCedia = hasPermission("cedia.view");
+  const canViewNotifications = hasPermission("notifications.view");
+  const canViewAudit = hasPermission("audit.view");
+  const canManageUsers = hasPermission("users.manage");
 
   return (
     <Routes>
@@ -46,10 +56,9 @@ function AppRoutes() {
         element={
           isAuthenticated ? (
             enforcePasswordChange ? (
-              <div className="min-h-screen bg-gray-50 flex flex-col">
-                <Navbar />
+              <AppLayout>
                 <ChangePasswordPage />
-              </div>
+              </AppLayout>
             ) : (
               <Navigate to="/choose" replace />
             )
@@ -65,8 +74,14 @@ function AppRoutes() {
           isAuthenticated ? (
             enforcePasswordChange ? (
               <Navigate to="/change-password" replace />
+            ) : canViewVmware || canViewHyperv ? (
+              <AppLayout mainClassName="p-0">
+                <ChooseInventory />
+              </AppLayout>
             ) : (
-              <ChooseInventory />
+              <AppLayout>
+                <AccessDenied description="No tienes permisos para ver inventarios (vms.view / hyperv.view)." />
+              </AppLayout>
             )
           ) : (
             <Navigate to="/login" replace />
@@ -80,11 +95,77 @@ function AppRoutes() {
           isAuthenticated ? (
             enforcePasswordChange ? (
               <Navigate to="/change-password" replace />
+            ) : canViewHyperv ? (
+              <AppLayout>
+                <HyperVPage />
+              </AppLayout>
             ) : (
-            <div className="min-h-screen bg-gray-50 flex flex-col">
-              <Navbar />
-              <HyperVPage />
-            </div>
+              <AppLayout>
+                <AccessDenied description="Necesitas el permiso hyperv.view para acceder." />
+              </AppLayout>
+            )
+          ) : (
+            <Navigate to="/login" replace />
+          )
+        }
+      />
+
+      <Route
+        path="/hyperv-hosts"
+        element={
+          isAuthenticated ? (
+            enforcePasswordChange ? (
+              <Navigate to="/change-password" replace />
+            ) : canViewHyperv ? (
+              <AppLayout mainClassName="p-0">
+                <HyperVHostsPage />
+              </AppLayout>
+            ) : (
+              <AppLayout>
+                <AccessDenied description="Necesitas el permiso hyperv.view para acceder." />
+              </AppLayout>
+            )
+          ) : (
+            <Navigate to="/login" replace />
+          )
+        }
+      />
+
+      <Route
+        path="/cedia"
+        element={
+          isAuthenticated ? (
+            enforcePasswordChange ? (
+              <Navigate to="/change-password" replace />
+            ) : canViewCedia ? (
+              <AppLayout>
+                <CediaPage />
+              </AppLayout>
+            ) : (
+              <AppLayout>
+                <AccessDenied description="Necesitas el permiso cedia.view para acceder." />
+              </AppLayout>
+            )
+          ) : (
+            <Navigate to="/login" replace />
+          )
+        }
+      />
+
+      <Route
+        path="/hosts"
+        element={
+          isAuthenticated ? (
+            enforcePasswordChange ? (
+              <Navigate to="/change-password" replace />
+            ) : canViewVmware ? (
+              <AppLayout mainClassName="p-0">
+                <HostTable />
+              </AppLayout>
+            ) : (
+              <AppLayout>
+                <AccessDenied description="Necesitas el permiso vms.view para acceder." />
+              </AppLayout>
             )
           ) : (
             <Navigate to="/login" replace />
@@ -99,10 +180,9 @@ function AppRoutes() {
             enforcePasswordChange ? (
               <Navigate to="/change-password" replace />
             ) : (
-            <div className="min-h-screen bg-gray-50 flex flex-col">
-              <Navbar />
-              <KVMPage />
-            </div>
+              <AppLayout>
+                <KVMPage />
+              </AppLayout>
             )
           ) : (
             <Navigate to="/login" replace />
@@ -116,23 +196,14 @@ function AppRoutes() {
           isAuthenticated ? (
             enforcePasswordChange ? (
               <Navigate to="/change-password" replace />
-            ) : isSuperadmin ? (
-              <div className="min-h-screen bg-gray-50 flex flex-col">
-                <Navbar />
+            ) : canViewNotifications ? (
+              <AppLayout>
                 <NotificationsPage />
-              </div>
+              </AppLayout>
             ) : (
-              <div className="min-h-screen bg-gray-50 flex flex-col">
-                <Navbar />
-                <div className="flex flex-1 items-center justify-center px-6 py-20">
-                  <div className="max-w-md rounded-lg border border-gray-200 bg-white p-8 text-center shadow">
-                    <h2 className="text-lg font-semibold text-gray-900">Acceso denegado</h2>
-                    <p className="mt-2 text-sm text-gray-600">
-                      Esta sección solo está disponible para usuarios con rol <strong>SUPERADMIN</strong>.
-                    </p>
-                  </div>
-                </div>
-              </div>
+              <AppLayout>
+                <AccessDenied description="Necesitas el permiso notifications.view para acceder." />
+              </AppLayout>
             )
           ) : (
             <Navigate to="/login" replace />
@@ -146,23 +217,14 @@ function AppRoutes() {
           isAuthenticated ? (
             enforcePasswordChange ? (
               <Navigate to="/change-password" replace />
-            ) : isSuperadmin ? (
-              <div className="min-h-screen bg-gray-50 flex flex-col">
-                <Navbar />
+            ) : canViewAudit ? (
+              <AppLayout>
                 <AuditPage />
-              </div>
+              </AppLayout>
             ) : (
-              <div className="min-h-screen bg-gray-50 flex flex-col">
-                <Navbar />
-                <div className="flex flex-1 items-center justify-center px-6 py-20">
-                  <div className="max-w-md rounded-lg border border-gray-200 bg-white p-8 text-center shadow">
-                    <h2 className="text-lg font-semibold text-gray-900">Acceso denegado</h2>
-                    <p className="mt-2 text-sm text-gray-600">
-                      Esta sección solo está disponible para usuarios con rol <strong>SUPERADMIN</strong>.
-                    </p>
-                  </div>
-                </div>
-              </div>
+              <AppLayout>
+                <AccessDenied description="Necesitas el permiso audit.view para acceder." />
+              </AppLayout>
             )
           ) : (
             <Navigate to="/login" replace />
@@ -176,11 +238,14 @@ function AppRoutes() {
           isAuthenticated ? (
             enforcePasswordChange ? (
               <Navigate to="/change-password" replace />
+            ) : canManageUsers ? (
+              <AppLayout>
+                <UserAdminPage />
+              </AppLayout>
             ) : (
-            <div className="min-h-screen bg-gray-50 flex flex-col">
-              <Navbar />
-              <UserAdminPage />
-            </div>
+              <AppLayout>
+                <AccessDenied description="Necesitas el permiso users.manage para acceder." />
+              </AppLayout>
             )
           ) : (
             <Navigate to="/login" replace />
@@ -194,11 +259,14 @@ function AppRoutes() {
           isAuthenticated ? (
             enforcePasswordChange ? (
               <Navigate to="/change-password" replace />
+            ) : canViewVmware ? (
+              <AppLayout>
+                <VMTable />
+              </AppLayout>
             ) : (
-            <div className="min-h-screen bg-gray-50 flex flex-col">
-              <Navbar />
-              <VMTable />
-            </div>
+              <AppLayout>
+                <AccessDenied description="Necesitas el permiso vms.view para acceder." />
+              </AppLayout>
             )
           ) : (
             <Navigate to="/login" replace />

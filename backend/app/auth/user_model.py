@@ -1,13 +1,6 @@
 from datetime import datetime, timezone
-from enum import Enum
-
 from sqlmodel import Field, SQLModel
 
-
-class UserRole(str, Enum):
-    SUPERADMIN = "superadmin"
-    ADMIN = "admin"
-    USER = "user"
 
 # —————— Definición del modelo de usuario ——————
 class User(SQLModel, table=True):
@@ -22,7 +15,6 @@ class User(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     username: str = Field(index=True, unique=True)
     hashed_password: str
-    role: UserRole = Field(default=UserRole.USER, nullable=False)
     must_change_password: bool = Field(default=False, nullable=False)
     password_last_set_at: datetime | None = Field(default=None, nullable=True)
 

@@ -15,8 +15,9 @@ from app.db import get_session
 from app.dependencies import (
     AuditRequestContext,
     get_request_audit_context,
-    require_superadmin,
+    require_permission,
 )
+from app.permissions.models import PermissionCode
 from app.notifications.models import (
     Notification,
     NotificationMetric,
@@ -35,9 +36,7 @@ from app.notifications.utils import ensure_utc, norm_enum
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(
-    dependencies=[Depends(require_superadmin)],
-)
+router = APIRouter()
 
 
 def _normalize_notification(rec: Notification) -> Notification:
@@ -131,6 +130,7 @@ def list_notifications(
     limit: int = Query(default=25, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     session: Session = Depends(get_session),
+    _user: User = Depends(require_permission(PermissionCode.NOTIFICATIONS_VIEW)),
 ):
     statuses = _parse_csv_enum(status_filter, NotificationStatus)
     provider_enum = None
@@ -185,7 +185,7 @@ def list_notifications(
 def ack_notification(
     notification_id: int,
     session: Session = Depends(get_session),
-    current_user: User = Depends(require_superadmin),
+    current_user: User = Depends(require_permission(PermissionCode.NOTIFICATIONS_ACK)),
     audit_ctx: AuditRequestContext = Depends(get_request_audit_context),
 ):
     notification = session.get(Notification, notification_id)
@@ -293,6 +293,7 @@ def _evaluate_clear_candidates(
 def clear_resolved_notifications(
     payload: ClearResolvedRequest,
     session: Session = Depends(get_session),
+    _user: User = Depends(require_permission(PermissionCode.NOTIFICATIONS_CLEAR)),
 ):
     open_notifications = session.exec(
         select(Notification).where(Notification.status == NotificationStatus.OPEN)

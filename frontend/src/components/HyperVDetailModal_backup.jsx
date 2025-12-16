@@ -451,12 +451,10 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
                     }
                     setActionLoading(pending.apiPath);
                     setError("");
-                    let ok = false;
                     try {
                       const resp = await api.post(
                         `/hyperv/vms/${hvhost}/${vmname}/power/${action}`
                       );
-                      ok = true;
                       setSuccessMsg(
                         resp?.data?.message ||
                         `Acción ${pending.text.toLowerCase()} aceptada para ${vmname} en ${hvhost}.`

@@ -31,7 +31,7 @@ def decode_access_token(token: str) -> Dict[str, Any]:
     Decodifica y valida un JWT.
     - Re-lanza ExpiredSignatureError si el token expiró.
     - Re-lanza JWTError si la firma es inválida.
-    - Verifica que el payload incluya las claves 'sub', 'role' y 'username'.
+    - Verifica que el payload incluya las claves 'sub' y 'username'.
     """
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
@@ -40,7 +40,7 @@ def decode_access_token(token: str) -> Dict[str, Any]:
     except JWTError:
         raise
 
-    for claim in ("sub", "role", "username"):
+    for claim in ("sub", "username"):
         if claim not in payload:
             raise JWTError(f"Missing claim '{claim}'")
 

@@ -1,3 +1,6 @@
+/* eslint-env jest */
+/* global require, jest, describe, it, expect, beforeEach, afterEach */
+
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import NotificationsPage from "../src/pages/NotificationsPage.jsx";
 import { listNotifications, ackNotification } from "../src/api/notifications.js";

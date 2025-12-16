@@ -11,13 +11,6 @@ import {
 } from 'react-icons/fa'
 import { GiSandCastle } from 'react-icons/gi'
 
-const formatNumber = (value) => {
-  if (value == null || value === '') return '\u2014'
-  const parsed = Number(value)
-  if (!Number.isFinite(parsed)) return value
-  return parsed.toLocaleString()
-}
-
 const formatPercent = (value) => {
   if (value == null || value === '') return '\u2014'
   const parsed = Number(value)

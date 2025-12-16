@@ -28,7 +28,7 @@ export default function HyperVPage() {
       if (status === 401) {
         throw error
       }
-      throw new Error('OcurriA3 un error al obtener las VMs.')
+      throw new Error('Ocurrió un error al obtener las VMs. Intenta nuevamente.')
     }
   }, [])
 

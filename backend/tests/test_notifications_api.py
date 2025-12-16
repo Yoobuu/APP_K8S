@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import HTTPException
 from sqlmodel import Session, select
 
 from app.audit.models import AuditLog
-from app.dependencies import require_superadmin
+from app.auth.user_model import User, UserRole
+from app.dependencies import get_current_user
 from app.notifications.models import Notification, NotificationMetric, NotificationProvider, NotificationStatus
 
 
@@ -89,12 +89,13 @@ def test_ack_notification_flow(client, session, test_engine):
     assert response.status_code == 404
 
 
-def test_ack_requires_superadmin(client, session):
+def test_ack_requires_permission(client, session):
     _seed_notifications(session)
 
-    def override_require_superadmin():
-        raise HTTPException(status_code=403, detail="Forbidden")
-    client.app.dependency_overrides[require_superadmin] = override_require_superadmin
+    def override_get_current_user():
+        return User(id=123, username="limited", hashed_password="x", role=UserRole.USER)
+
+    client.app.dependency_overrides[get_current_user] = override_get_current_user
     response = client.post("/api/notifications/1/ack")
     assert response.status_code == 403
-    client.app.dependency_overrides.pop(require_superadmin, None)
+    client.app.dependency_overrides.pop(get_current_user, None)

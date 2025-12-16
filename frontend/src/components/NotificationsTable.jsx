@@ -19,10 +19,12 @@ export default function NotificationsTable({
   fetchError = "",
   onAck,
   onViewDisks,
+  onResetFilters,
   formatDate,
   formatDateUTC,
   formatNumber,
   statusMeta = {},
+  canAckPermission = true,
 }) {
   if (loading) {
     return <div className="p-6 text-sm text-gray-600">Cargando…</div>;
@@ -30,15 +32,40 @@ export default function NotificationsTable({
 
   if (fetchError) {
     return (
-      <div className="p-6 text-sm text-gray-600">
-        No se pudieron cargar las notificaciones. Detalle:{" "}
-        <span className="font-medium text-gray-900">{fetchError}</span>
+      <div className="flex flex-col gap-3 p-6 text-sm text-gray-600">
+        <p>
+          No se pudieron cargar las notificaciones. Detalle:{" "}
+          <span className="font-medium text-gray-900">{fetchError}</span>
+        </p>
+        {onResetFilters && (
+          <button
+            type="button"
+            onClick={onResetFilters}
+            className="self-start rounded border border-gray-300 px-3 py-1 text-xs font-semibold text-gray-700 transition hover:border-blue-500 hover:text-blue-600"
+          >
+            Restablecer filtros
+          </button>
+        )}
       </div>
     );
   }
 
   if (!items.length) {
-    return <div className="p-6 text-sm text-gray-600">Sin notificaciones para los filtros actuales.</div>;
+    return (
+      <div className="flex flex-col gap-3 p-6 text-sm text-gray-600">
+        <p>Sin notificaciones para los filtros actuales.</p>
+        <p>Revisa que el rango de fechas y proveedor sean correctos o restablece los filtros para ver todo el historial.</p>
+        {onResetFilters && (
+          <button
+            type="button"
+            onClick={onResetFilters}
+            className="self-start rounded border border-gray-300 px-3 py-1 text-xs font-semibold text-gray-700 transition hover:border-blue-500 hover:text-blue-600"
+          >
+            Restablecer filtros
+          </button>
+        )}
+      </div>
+    );
   }
 
   return (
@@ -64,17 +91,17 @@ export default function NotificationsTable({
         <tbody className="divide-y divide-gray-100 bg-white">
           {items.map((item) => {
             const providerValue = (item.provider || "").toUpperCase();
-            const metricValue = (item.metric || "").toUpperCase();
-            const statusValue = (item.status || "").toUpperCase();
-            const meta =
-              statusMeta[statusValue] ||
-              statusMeta.DEFAULT || {
+          const metricValue = (item.metric || "").toUpperCase();
+          const statusValue = (item.status || "").toUpperCase();
+          const meta =
+            statusMeta[statusValue] ||
+            statusMeta.DEFAULT || {
                 icon: "⚪",
                 label: statusValue || "Sin estado",
                 badgeClass: "bg-gray-100 text-gray-700 border-gray-300",
                 tooltip: "Estado no reconocido por el sistema",
               };
-            const canAck = statusValue === "OPEN";
+            const canAck = statusValue === "OPEN" && canAckPermission;
             const showDisks =
               metricValue === "DISK" && Array.isArray(item.disks_json) && item.disks_json.length > 0;
 

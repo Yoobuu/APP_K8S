@@ -58,8 +58,8 @@ function inferEnvironment({ vm, selectorKey }) {
 // Nota: ya no bloqueamos por sandbox. Los botones siempre salen.
 export default function HyperVDetailModal({ record, selectorKey = '', onClose }) {
   const modalRef = useRef(null)
-  const { canManagePower } = useAuth()
-  const powerDisabled = !canManagePower
+  const { hasPermission } = useAuth()
+  const powerDisabled = !hasPermission("hyperv.power")
   const powerDisabledMessage = 'No tienes permisos para controlar energia. Pide acceso a un admin.'
   const [loading] = useState(false)
   const [error, setError] = useState('')
@@ -87,9 +87,6 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
     baseVm.CPUPercent ??
     baseVm.cpuPercent ??
     null
-  const cpuPctDisplay = cpuPctRaw !== null && cpuPctRaw !== undefined
-    ? `${cpuPctRaw}%`
-    : '\u2014'
   const toGiB = (value) => {
     const parsed = Number(value)
     if (!Number.isFinite(parsed)) return null
@@ -213,7 +210,6 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
     baseVm.RAM_TotalMiB ??
     null
   const ramTotalGiBDisplay = formatGiB(ramTotalMiBRaw)
-  const ramTotalMiB = ramTotalMiBRaw ?? '\u2014'
   const ramDemandMiBRaw =
     baseVm.RAM_Demand_MiB ??
     baseVm.RAM_DemandMiB ??
@@ -226,7 +222,6 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
     baseVm.ramDemandMiB ??
     null
   const ramDemandGiBDisplay = formatGiB(ramDemandMiBRaw)
-  const ramDemandMiB = ramDemandMiBRaw ?? '\u2014'
   const ramPctRaw =
     baseVm.RAM_UsagePct ??
     baseVm.ram_pct ??
@@ -235,9 +230,6 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
     baseVm.RAMUsagePct ??
     baseVm.RamUsagePct ??
     null
-  const ramPctDisplay = ramPctRaw !== null && ramPctRaw !== undefined
-    ? `${ramPctRaw}%`
-    : '\u2014'
   const osDisplay =
     baseVm.OS ||
     baseVm.os ||
@@ -616,10 +608,8 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
                       }
                       setActionLoading(pending.apiPath);
                       setError("");
-                      let ok = false;
                       try {
                         const resp = await api.post(`/hyperv/vms/${hvhost}/${vmname}/power/${action}`);
-                        ok = true;
                         setSuccessMsg(
                           resp?.data?.message ||
                             `Acción ${pending.text.toLowerCase()} aceptada para ${vmname} en ${hvhost}.`

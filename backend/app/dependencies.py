@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Iterable, Optional
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
@@ -9,8 +9,10 @@ from jose import ExpiredSignatureError, JWTError
 from sqlmodel import Session, select
 
 from app.auth.jwt_handler import decode_access_token
-from app.auth.user_model import User, UserRole
+from app.auth.user_model import User
 from app.db import get_session
+from app.permissions.models import PermissionCode
+from app.permissions.service import user_has_permission
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
@@ -61,28 +63,46 @@ def get_current_user(
     return user
 
 
-def require_admin(current_user: User = Depends(get_current_user)) -> User:
+def require_permission(permission: PermissionCode):
     """
-    Permite acceso solamente a usuarios con rol ADMIN o SUPERADMIN.
+    Devuelve un dependency que valida que el usuario tenga el permiso solicitado.
+    Se basa únicamente en permisos atómicos por usuario.
     """
-    if current_user.role not in (UserRole.ADMIN, UserRole.SUPERADMIN):
+
+    def _dep(
+        current_user: User = Depends(get_current_user),
+        session: Session = Depends(get_session),
+    ) -> User:
+        if user_has_permission(current_user, permission, session):
+            return current_user
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Permisos insuficientes",
+            detail=f"Permiso requerido: {permission.value}",
         )
-    return current_user
+
+    return _dep
 
 
-def require_superadmin(current_user: User = Depends(get_current_user)) -> User:
+def require_any(permissions: Iterable[PermissionCode]):
     """
-    Permite acceso únicamente a usuarios con rol SUPERADMIN.
+    Devuelve un dependency que acepta si el usuario tiene AL MENOS uno de los permisos dados.
     """
-    if current_user.role != UserRole.SUPERADMIN:
+    perm_list = list(permissions)
+
+    def _dep(
+        current_user: User = Depends(get_current_user),
+        session: Session = Depends(get_session),
+    ) -> User:
+        for perm in perm_list:
+            if user_has_permission(current_user, perm, session):
+                return current_user
+        joined = ", ".join(p.value for p in perm_list)
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Permisos insuficientes",
+            detail=f"Permisos insuficientes (requiere uno de: {joined})",
         )
-    return current_user
+
+    return _dep
 
 
 @dataclass
