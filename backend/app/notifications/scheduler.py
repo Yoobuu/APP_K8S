@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import logging
-import os
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from app.jobs.hourly_reconcile import run_hourly_reconcile
+from app.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -22,10 +22,9 @@ def scan_vm_metrics_job() -> None:
 
 
 def schedule_scan_job(scheduler: BackgroundScheduler) -> None:
-    dev_minutes = os.getenv("NOTIF_SCHED_DEV_MINUTES")
+    dev_minutes = settings.notif_sched_dev_minutes
     if dev_minutes:
-        minute_value = dev_minutes.strip() or "1"
-        cron_args = {"minute": f"*/{minute_value}"}
+        cron_args = {"minute": f"*/{dev_minutes}"}
     else:
         cron_args = {"minute": "0"}
 

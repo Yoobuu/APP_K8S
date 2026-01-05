@@ -62,11 +62,15 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
   const powerDisabled = !hasPermission("hyperv.power")
   const powerDisabledMessage = 'No tienes permisos para controlar energia. Pide acceso a un admin.'
   const [loading] = useState(false)
+  const [detail, setDetail] = useState(null)
+  const [detailLoading, setDetailLoading] = useState(false)
+  const [detailError, setDetailError] = useState('')
+  const [isTakingLong, setIsTakingLong] = useState(false)
+  const canFetchDetail = hasPermission('jobs.trigger')
   const [error, setError] = useState('')
   const [successMsg, setSuccessMsg] = useState('')
   const [actionLoading, setActionLoading] = useState(null)
   const [pending, setPending] = useState(null)
-  const detail = null
   const baseVm = detail || record || {}
   // Unifica la vista de tabla y el modal para mostrar Encendida/Apagada en lugar de POWERED_ON.
   const POWER_LABELS = {
@@ -80,6 +84,7 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
   const friendlyPowerState = POWER_LABELS[rawPowerState] || rawPowerState || '\u2014'
   const cpuPctRaw =
     baseVm.CPU_UsagePct ??
+    baseVm.cpu_usage_pct ??
     baseVm.cpuUsagePct ??
     baseVm.cpu_pct ??
     baseVm.CpuUsagePct ??
@@ -159,6 +164,73 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
       pct: parsePctFromText(textValue),
     }
   }
+  const hasDiskMetrics = (vm) => {
+    if (!vm || typeof vm !== 'object') return false
+    if (Array.isArray(vm.disks)) {
+      return vm.disks.some((disk) => disk && (disk.text || disk.pct != null))
+    }
+    const rawList = Array.isArray(vm.Disks)
+      ? vm.Disks
+      : Array.isArray(vm.Discos)
+        ? vm.Discos
+        : null
+    if (!rawList) return false
+    return rawList.some((disk) => {
+      if (!disk || typeof disk !== 'object') return false
+      return (
+        disk.SizeGiB != null ||
+        disk.AllocatedGiB != null ||
+        disk.AllocatedPct != null
+      )
+    })
+  }
+  useEffect(() => {
+    if (!record) return undefined
+    setDetail(null)
+    setDetailError('')
+    setDetailLoading(false)
+    if (!canFetchDetail) return undefined
+    if (hasDiskMetrics(record)) return undefined
+    const hvhost = record.HVHost || record.host
+    const vmName = record.Name || record.name
+    if (!hvhost || !vmName) return undefined
+
+    let cancelled = false
+    setDetailLoading(true)
+    setIsTakingLong(false)
+    
+    // Si tarda más de 5s, mostramos mensaje de "paciencia"
+    const timer = setTimeout(() => {
+      if (!cancelled) setIsTakingLong(true)
+    }, 5000)
+
+    api.get(
+      `/hyperv/vms/${encodeURIComponent(String(hvhost))}/${encodeURIComponent(String(vmName))}/detail`
+    )
+      .then((resp) => {
+        if (cancelled) return
+        setDetail(resp?.data || null)
+      })
+      .catch((err) => {
+        if (cancelled) return
+        if (err?.response?.status === 403) {
+          setDetailError('Sin permisos para consultar detalle de discos.')
+          return
+        }
+        const apiMsg = err?.response?.data?.detail || err?.message || 'Error desconocido'
+        setDetailError(`Error: ${apiMsg}`)
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setDetailLoading(false)
+          clearTimeout(timer)
+        }
+      })
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [record, canFetchDetail])
   const renderDisksWithBars = (disks) => {
     if (!Array.isArray(disks) || disks.length === 0) {
       return '\u2014'
@@ -201,6 +273,7 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
   const ramTotalMiBRaw =
     baseVm.RAM ??
     baseVm.RAM_MiB ??
+    baseVm.memory_size_MiB ??
     baseVm.MemoryMB ??
     baseVm.mem_total ??
     baseVm.MemoryMB_Allocated ??
@@ -224,6 +297,7 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
   const ramDemandGiBDisplay = formatGiB(ramDemandMiBRaw)
   const ramPctRaw =
     baseVm.RAM_UsagePct ??
+    baseVm.ram_usage_pct ??
     baseVm.ram_pct ??
     baseVm.mem_pct ??
     baseVm.MemoryUsagePct ??
@@ -237,6 +311,7 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
     baseVm.guestFullName ||
     baseVm.GuestOS ||
     baseVm.guestOS ||
+    baseVm.guest_os ||
     '\u2014'
   let ipv4Display = '\u2014'
   if (Array.isArray(baseVm.IPv4)) {
@@ -246,6 +321,7 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
     ipv4Display = baseVm.IPv4
   } else {
     const ipv4Fallback =
+      baseVm.ip_addresses ??
       baseVm.ipv4 ??
       baseVm.IP ??
       baseVm.ip ??
@@ -382,6 +458,9 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
       entry.percent,
       entry.pct
     )
+    const hasMetric = [alloc, size, pct].some(
+      (value) => value !== undefined && value !== null && value !== ''
+    )
     if (size && pct !== undefined && pct !== null && pct !== '') {
       const allocText =
         alloc !== undefined && alloc !== null && alloc !== ''
@@ -396,6 +475,7 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
       typeof source.display === 'string' ? source.display : undefined
     )
     if (displayText) return displayText
+    if (!hasMetric) return ''
     if (source && typeof source.toString === 'function') {
       const strValue = source.toString.call(source)
       if (strValue && strValue !== '[object Object]') return strValue
@@ -412,6 +492,33 @@ export default function HyperVDetailModal({ record, selectorKey = '', onClose })
     }
   }
   const buildDisksDisplay = () => {
+    const hasDiskData = hasDiskMetrics(baseVm)
+    if (!hasDiskData) {
+      if (detailLoading) {
+        return (
+          <div className="flex flex-col gap-1">
+            <span className="text-xs text-gray-500 animate-pulse">
+              Consultando discos...
+            </span>
+            {isTakingLong && (
+              <span className="text-xs text-amber-600">
+                Conectando al host en tiempo real. Esto puede demorar varios minutos si el host está lento...
+              </span>
+            )}
+          </div>
+        )
+      }
+      if (detailError) {
+        return <span className="text-xs text-red-600">{detailError}</span>
+      }
+      if (!canFetchDetail) {
+        return (
+          <span className="text-xs text-gray-500">
+            Detalle de discos no disponible (permiso requerido).
+          </span>
+        )
+      }
+    }
     const normalized = Array.isArray(baseVm.disks) ? baseVm.disks : null
     if (normalized && normalized.length) {
       return renderDisksWithBars(normalized)

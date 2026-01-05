@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import base64
 import logging
-import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 import requests
 from fastapi import HTTPException, status
+from app.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -39,9 +39,9 @@ _token_state: Optional[TokenState] = None
 
 
 def _resolve_config() -> CediaConfig:
-    base = os.getenv("CEDIA_BASE", "").rstrip("/")
-    user = os.getenv("CEDIA_USER", "")
-    password = os.getenv("CEDIA_PASS", "")
+    base = (settings.cedia_base or "").rstrip("/")
+    user = settings.cedia_user or ""
+    password = settings.cedia_pass or ""
     if not base or not user or not password:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

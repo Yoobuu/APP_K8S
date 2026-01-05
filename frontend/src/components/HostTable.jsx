@@ -1,21 +1,16 @@
 import { useCallback, useMemo, useState } from 'react'
 import { IoServerSharp, IoPulse, IoSwapHorizontalSharp } from 'react-icons/io5'
 import { MdOutlinePower } from 'react-icons/md'
-import { getHosts } from '../api/hosts'
+import { getVmwareHostsSnapshot } from '../api/hosts'
 import { normalizeHostSummary } from '../lib/normalizeHost'
 import { useInventoryState } from './VMTable/useInventoryState'
 import HostDetailModal from './HostDetailModal'
 import DeepExpertModal from './DeepExpertModal'
+import InventoryMetaBar from './common/InventoryMetaBar'
 
 const AUTO_REFRESH_MS = 5 * 60 * 1000
 const gradientBg = 'bg-gradient-to-br from-neutral-900 via-black to-neutral-950'
 const cardColors = ['from-yellow-500/30', 'from-cyan-500/30', 'from-blue-500/30', 'from-amber-500/30', 'from-emerald-500/30']
-
-const hostFetcher = async ({ refresh } = {}) => {
-  const params = refresh ? { refresh: true } : undefined
-  const data = await getHosts(params)
-  return Array.isArray(data) ? data : data.results || []
-}
 
 const hostSummaryBuilder = (items) => {
   const total = items.length
@@ -61,7 +56,27 @@ const typeBadge = (type) => (
 )
 
 export default function HostTable() {
+  const [snapshotGeneratedAt, setSnapshotGeneratedAt] = useState(null)
+  const [snapshotSource, setSnapshotSource] = useState(null)
+  const [snapshotStale, setSnapshotStale] = useState(false)
+  const [snapshotStaleReason, setSnapshotStaleReason] = useState(null)
   const [showDeep, setShowDeep] = useState(false)
+  const hostFetcher = useCallback(async () => {
+    const snapshot = await getVmwareHostsSnapshot()
+    if (snapshot?.empty) {
+      setSnapshotGeneratedAt(null)
+      setSnapshotSource(null)
+      setSnapshotStale(false)
+      setSnapshotStaleReason(null)
+      return { empty: true }
+    }
+    setSnapshotGeneratedAt(snapshot?.generated_at || null)
+    setSnapshotSource(snapshot?.source || null)
+    setSnapshotStale(Boolean(snapshot?.stale))
+    setSnapshotStaleReason(snapshot?.stale_reason || null)
+    const payload = snapshot?.data || {}
+    return Array.isArray(payload?.vmware) ? payload.vmware : []
+  }, [])
 
   const { state, actions } = useInventoryState({
     provider: 'hosts',
@@ -94,7 +109,6 @@ export default function HostTable() {
     processed,
     groups,
   } = state
-
   const {
     setFilter,
     setGroupByOption,
@@ -199,9 +213,18 @@ export default function HostTable() {
             <h2 className="text-3xl font-bold text-yellow-300 drop-shadow">Hosts ESXi</h2>
             <p className="text-sm text-neutral-300">Inventario en vivo por cluster y estado.</p>
           </div>
-          <div className="flex items-center gap-3 text-xs text-neutral-300">
+          <div className="flex flex-col items-end gap-2 text-xs text-neutral-300">
             {refreshing && <span className="text-cyan-300">Actualizando…</span>}
-            {lastFetchTs && <span>Última actualización {new Date(lastFetchTs).toLocaleString()}</span>}
+            <InventoryMetaBar
+              generatedAt={snapshotGeneratedAt}
+              source={snapshotSource}
+              lastFetchTs={lastFetchTs}
+              stale={snapshotStale}
+              staleReason={snapshotStaleReason}
+              className="items-end text-right"
+              textClassName="text-xs text-neutral-300"
+              badgeClassName="border-amber-400/60 text-amber-200 bg-amber-500/10"
+            />
             <button
               onClick={() => fetchVm({ refresh: true, showLoading: false })}
               className="rounded-lg border border-yellow-400/60 px-3 py-1.5 text-sm font-semibold text-yellow-200 hover:bg-yellow-400/10"

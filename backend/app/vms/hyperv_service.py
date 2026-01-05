@@ -2,7 +2,7 @@
 from __future__ import annotations
 from typing import List, Optional
 import logging
-import os
+from app.settings import settings
 
 from cachetools import TTLCache
 from pydantic import ValidationError
@@ -18,16 +18,16 @@ from app.vms.hyperv_host_models import HyperVHostSummary
 logger = logging.getLogger("hyperv.service")
 
 # Cache por nivel
-_BASE_SUMMARY_TTL = os.getenv("HYPERV_CACHE_TTL")
+_BASE_SUMMARY_TTL = settings.hyperv_cache_ttl
 _CACHE_TTLS = {
-    "summary": int(_BASE_SUMMARY_TTL or os.getenv("HYPERV_CACHE_TTL_SUMMARY", "300")),
-    "detail": int(os.getenv("HYPERV_CACHE_TTL_DETAIL", "120")),
-    "deep": int(os.getenv("HYPERV_CACHE_TTL_DEEP", "30")),
+    "summary": int(_BASE_SUMMARY_TTL or settings.hyperv_cache_ttl_summary),
+    "detail": settings.hyperv_cache_ttl_detail,
+    "deep": settings.hyperv_cache_ttl_deep,
 }
 _HOST_CACHE: dict[str, TTLCache] = {
     level: TTLCache(maxsize=64, ttl=ttl) for level, ttl in _CACHE_TTLS.items()
 }
-_HOST_INFO_CACHE = TTLCache(maxsize=64, ttl=int(os.getenv("HYPERV_CACHE_TTL_HOSTS", "300")))
+_HOST_INFO_CACHE = TTLCache(maxsize=64, ttl=settings.hyperv_cache_ttl_hosts)
 
 # ─────────────────────────────────────────────
 # Helper para normalizar porcentajes

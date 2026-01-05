@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import ssl
 from datetime import datetime, timezone
 from dataclasses import dataclass
@@ -18,12 +17,8 @@ from pyVim.connect import Disconnect, SmartConnect  # SOAP client
 from pyVmomi import vim  # vSphere SDK types
 
 from app.config import VCENTER_HOST, VCENTER_PASS, VCENTER_USER
+from app.settings import settings
 from app.vms.vm_models import VMBase, VMDetail
-try:
-    from app.main import TEST_MODE
-except Exception:
-    TEST_MODE = False
-
 logger = logging.getLogger(__name__)
 
 # ───────────────────────────────────────────────────────────────────────
@@ -100,11 +95,11 @@ def reset_caches() -> None:
 
 def _resolve_vcenter_settings() -> Dict[str, Optional[str]]:
     """Fetch vCenter configuration from environment, preserving current behaviour."""
-    if TEST_MODE:
+    if settings.test_mode:
         return {"host": None, "user": None, "password": None, "soap_host": None, "test_mode": True}
-    host = os.getenv("VCENTER_HOST", VCENTER_HOST)
-    user = os.getenv("VCENTER_USER", VCENTER_USER)
-    password = os.getenv("VCENTER_PASS", VCENTER_PASS)
+    host = settings.vcenter_host or VCENTER_HOST
+    user = settings.vcenter_user or VCENTER_USER
+    password = settings.vcenter_pass or VCENTER_PASS
     sanitized_host = (host or "").replace("https://", "").replace("http://", "")
     return {
         "host": host,
@@ -116,18 +111,18 @@ def _resolve_vcenter_settings() -> Dict[str, Optional[str]]:
 
 def validate_vcenter_configuration() -> List[str]:
     """Return a list of issues if essential vCenter credentials are missing."""
-    if TEST_MODE:
+    if settings.test_mode:
         return []
-    settings = _resolve_vcenter_settings()
+    vcenter_cfg = _resolve_vcenter_settings()
     issues: List[str] = []
 
-    if not settings["host"]:
+    if not vcenter_cfg["host"]:
         issues.append("VCENTER_HOST is not configured")
-    if settings["host"] and not settings["soap_host"]:
+    if vcenter_cfg["host"] and not vcenter_cfg["soap_host"]:
         issues.append("VCENTER_HOST normalizes to an empty host")
-    if not settings["user"]:
+    if not vcenter_cfg["user"]:
         issues.append("VCENTER_USER is not configured")
-    if not settings["password"]:
+    if not vcenter_cfg["password"]:
         issues.append("VCENTER_PASS is not configured")
 
     return issues
@@ -143,17 +138,17 @@ def _soap_connect():
     Crea una conexión no verificada al vCenter via pyVmomi
     y devuelve el ServiceInstance y su Content.
     """
-    if TEST_MODE:
+    if settings.test_mode:
         return None, None
-    settings = _resolve_vcenter_settings()
-    if not settings["soap_host"] or not settings["user"] or not settings["password"]:
+    vcenter_cfg = _resolve_vcenter_settings()
+    if not vcenter_cfg["soap_host"] or not vcenter_cfg["user"] or not vcenter_cfg["password"]:
         raise RuntimeError("Incomplete vCenter SOAP configuration")
 
     ctx = ssl._create_unverified_context()
     si = SmartConnect(
-        host=settings["soap_host"],
-        user=settings["user"],
-        pwd=settings["password"],
+        host=vcenter_cfg["soap_host"],
+        user=vcenter_cfg["user"],
+        pwd=vcenter_cfg["password"],
         port=443,
         sslContext=ctx,
     )
@@ -162,7 +157,7 @@ def _soap_connect():
 
 def _build_placement_map() -> Dict[str, PlacementInfo]:
     """Load host/cluster and quickstat information for all VMs in a single SOAP pass."""
-    if TEST_MODE:
+    if settings.test_mode:
         return {}
     results: Dict[str, PlacementInfo] = {}
     try:

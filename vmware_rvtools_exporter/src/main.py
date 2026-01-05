@@ -9,6 +9,7 @@ from .config import load_config, parse_args
 from .collectors import COLLECTORS, CollectorContext
 from .diagnostics import Diagnostics
 from .schemas import SCHEMAS, SHEET_ORDER
+from .rvtools_compat import apply_compatibility
 from .vmware_client import connect, disconnect
 from .writer.csv_writer import write_csv
 from .writer.excel_writer import write_excel
@@ -165,29 +166,49 @@ def main() -> int:
             ):
                 diagnostics.add_empty(sheet_name)
 
-        write_excel(out_path, SCHEMAS, data_by_sheet, SHEET_ORDER)
+        # Apply RVTools Compatibility Layer
+        transformed_data = {}
+        transformed_schemas = {}
+        
+        for sheet_name in SHEET_ORDER:
+            original_rows = data_by_sheet.get(sheet_name, [])
+            new_rows, new_headers = apply_compatibility(sheet_name, original_rows)
+            transformed_data[sheet_name] = new_rows
+            transformed_schemas[sheet_name] = new_headers
+
+        write_excel(out_path, transformed_schemas, transformed_data, SHEET_ORDER)
         if csv_dir:
-            write_csv(csv_dir, SCHEMAS, data_by_sheet, SHEET_ORDER)
+            write_csv(csv_dir, transformed_schemas, transformed_data, SHEET_ORDER)
 
         logger.info("Export completado: %s", out_path)
         if csv_dir:
             logger.info("CSVs generados en: %s", csv_dir)
 
+        exported_counts = {name: len(transformed_data.get(name, [])) for name in SHEET_ORDER}
         total_vms = max(
-            len(data_by_sheet.get("vInfo", [])),
-            len(data_by_sheet.get("vCPU", [])),
-            len(data_by_sheet.get("vMemory", [])),
-            len(data_by_sheet.get("vTools", [])),
+            exported_counts.get("vInfo", 0),
+            exported_counts.get("vCPU", 0),
+            exported_counts.get("vMemory", 0),
+            exported_counts.get("vTools", 0),
         )
         logger.info(
             "Resumen VMs: total_vms=%s vInfo=%s vCPU=%s vMemory=%s vDisk=%s vNetwork=%s vTools=%s",
             total_vms,
-            len(data_by_sheet.get("vInfo", [])),
-            len(data_by_sheet.get("vCPU", [])),
-            len(data_by_sheet.get("vMemory", [])),
-            len(data_by_sheet.get("vDisk", [])),
-            len(data_by_sheet.get("vNetwork", [])),
-            len(data_by_sheet.get("vTools", [])),
+            exported_counts.get("vInfo", 0),
+            exported_counts.get("vCPU", 0),
+            exported_counts.get("vMemory", 0),
+            exported_counts.get("vDisk", 0),
+            exported_counts.get("vNetwork", 0),
+            exported_counts.get("vTools", 0),
+        )
+
+        logger.info(
+            "Resumen Infra: Hosts=%s Clusters=%s Datastores=%s VMK=%s pNIC=%s",
+            len(data_by_sheet.get("vHost", [])),
+            len(data_by_sheet.get("vCluster", [])),
+            len(data_by_sheet.get("vDatastore", [])),
+            len(data_by_sheet.get("vSC_VMK", [])),
+            len(data_by_sheet.get("vNIC", [])),
         )
 
         exit_code = 0

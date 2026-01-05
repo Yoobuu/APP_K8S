@@ -36,6 +36,21 @@ class RemoteCreds:
 PS_SCRIPT_BASENAME = "collect_hyperv_inventory.ps1"
 
 
+def _compute_winrm_timeouts(read_timeout_sec: int, *, cap_operation_timeout_sec: int | None = None) -> tuple[int, int]:
+    """
+    Compute pywinrm timeouts.
+
+    - operation_timeout_sec controls the WSMan operation timeout.
+    - read_timeout_sec controls the underlying HTTP read timeout and must be > operation_timeout_sec.
+    """
+    op_timeout = max(5, int(read_timeout_sec))
+    if cap_operation_timeout_sec is not None:
+        op_timeout = min(op_timeout, int(cap_operation_timeout_sec))
+    # Keep a small margin so the HTTP client doesn't cut off exactly at WSMan timeout.
+    read_timeout = op_timeout + 30
+    return op_timeout, read_timeout
+
+
 def _run_local_powershell(
     ps_path: str,
     hvhost: str,
@@ -189,8 +204,7 @@ def _run_winrm_inline(
     import base64, uuid
 
     endpoint = f"{creds.scheme}://{creds.host}:{creds.port}/wsman"
-    op_timeout = max(5, min(120, int(creds.read_timeout)))
-    read_timeout = op_timeout + 5
+    op_timeout, read_timeout = _compute_winrm_timeouts(creds.read_timeout)
 
     session = winrm.Session(
         target=endpoint,
@@ -333,8 +347,7 @@ def run_inventory(
             # 3) si no hay lista, abrir sesiA3n y probar archivo JSON/CSV remotos
             if data is None and creds.use_winrm:
                 endpoint = f"{creds.scheme}://{creds.host}:{creds.port}/wsman"
-                op_timeout = max(5, min(120, int(creds.read_timeout)))
-                read_timeout = op_timeout + 5
+                op_timeout, read_timeout = _compute_winrm_timeouts(creds.read_timeout)
                 session = winrm.Session(
                     target=endpoint,
                     auth=(creds.username or "", creds.password or ""),
@@ -433,8 +446,10 @@ try {{
 
     try:
         endpoint = f"{creds.scheme}://{creds.host}:{creds.port}/wsman"
-        op_timeout = max(5, min(120, int(creds.read_timeout)))
-        read_timeout = op_timeout + 5
+        op_timeout, read_timeout = _compute_winrm_timeouts(
+            creds.read_timeout,
+            cap_operation_timeout_sec=120,
+        )
         session = winrm.Session(
             target=endpoint,
             auth=(creds.username or "", creds.password or ""),

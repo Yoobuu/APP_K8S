@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { listCediaVms, getCediaVm, getCediaVmMetrics } from "../api/cedia";
+import { getCediaSnapshot, getCediaVm, getCediaVmMetrics } from "../api/cedia";
 import { useAuth } from "../context/AuthContext";
 import AccessDenied from "./AccessDenied";
 import LoadingThreeDotsJumping from "./LoadingThreeDotsJumping";
 import VMSummaryCards from "./VMTable/VMSummaryCards";
 import { columnsVMware } from "./inventoryColumns.jsx";
-import { exportInventoryCsv } from "../lib/exportCsv";
+import { exportCediaInventoryXlsx } from "../lib/exportXlsx";
+import InventoryMetaBar from "./common/InventoryMetaBar";
 
 const STATUS_COLORS = {
   POWERED_ON: "text-emerald-600 bg-emerald-50 border-emerald-200",
@@ -64,17 +65,53 @@ function buildDiskBars(detail, metrics) {
 
   const provNum = Number(provisioned);
   const usedNum = Number(used);
-  const pct = Number.isFinite(provNum) && provNum > 0 && Number.isFinite(usedNum) ? (usedNum / provNum) * 100 : undefined;
+  const totalPct = Number.isFinite(provNum) && provNum > 0 && Number.isFinite(usedNum) ? (usedNum / provNum) * 100 : undefined;
 
   return disks.map((disk, idx) => {
-    const textParts = [];
-    const label = disk?.name || disk?.id || `Disco ${idx + 1}`;
-    textParts.push(label);
-    const cap = pickNumber(disk?.provisionedSize || disk?.capacity || disk?.capacityMB);
-    if (Number.isFinite(cap)) {
-      textParts.push(`${cap} MB`);
-    }
-    return { text: textParts.join(" · "), pct };
+    const label = disk?.name || disk?.id || disk?.label || `Disco ${idx + 1}`;
+    const capacityKiB =
+      pickNumber(
+        disk?.provisionedKiB ??
+        disk?.capacityKiB ??
+        disk?.provisionedMB ??
+        disk?.provisionedSizeMB ??
+        disk?.capacityMB ??
+        disk?.sizeMB ??
+        disk?.provisionedSize ??
+        disk?.capacity ??
+        disk?.size
+      ) ?? (Number.isFinite(provNum) ? provNum : undefined);
+    const usedKiB =
+      pickNumber(
+        disk?.usedKiB ||
+          disk?.usedMB ||
+          disk?.consumedMB ||
+          disk?.usedMiB ||
+          disk?.consumedMiB ||
+          disk?.used ||
+          disk?.consumed
+      ) ??
+      (Number.isFinite(usedNum) ? usedNum : undefined);
+    const pctFromDisk =
+      Number.isFinite(usedKiB) && Number.isFinite(capacityKiB) && capacityKiB > 0
+        ? (usedKiB / capacityKiB) * 100
+        : undefined;
+    const pct = pctFromDisk ?? totalPct;
+
+    const parts = [label];
+    if (Number.isFinite(capacityKiB)) parts.push(formatStorageKiB(capacityKiB));
+    if (Number.isFinite(usedKiB)) parts.push(`Usado ${formatStorageKiB(usedKiB)}`);
+    if (Number.isFinite(pct)) parts.push(`${pct.toFixed(1)}%`);
+
+    return {
+      text: parts.join(" · "),
+      pct,
+      provisionedKiB: capacityKiB,
+      usedKiB: usedKiB,
+      capacityDisplay: Number.isFinite(capacityKiB) ? formatStorageKiB(capacityKiB) : "—",
+      usedDisplay: Number.isFinite(usedKiB) ? formatStorageKiB(usedKiB) : "—",
+      label,
+    };
   });
 }
 
@@ -233,6 +270,20 @@ function pickNumber(value) {
   }
   return undefined;
 }
+
+function formatStorageKiB(value) {
+  // Pure conversion: expects raw KiB, never pre-converted values or strings.
+  if (typeof value !== "number") return "—";
+  const kib = value;
+  if (!Number.isFinite(kib) || kib < 0) return "—";
+  const gib = kib / 1024 / 1024;
+  if (gib >= 1024) {
+    const tib = gib / 1024;
+    return `${tib.toFixed(2)} TiB`;
+  }
+  return `${gib.toFixed(2)} GiB`;
+}
+
 
 function coerceBool(value) {
   if (value === null || value === undefined) return undefined;
@@ -634,6 +685,11 @@ export default function CediaPage() {
   const [loading, setLoading] = useState(false);
   const [enriching, setEnriching] = useState(false);
   const [error, setError] = useState("");
+  const [snapshotMessage, setSnapshotMessage] = useState("");
+  const [snapshotGeneratedAt, setSnapshotGeneratedAt] = useState(null);
+  const [snapshotSource, setSnapshotSource] = useState(null);
+  const [snapshotStale, setSnapshotStale] = useState(false);
+  const [snapshotStaleReason, setSnapshotStaleReason] = useState(null);
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState("");
   const [filterEnv, setFilterEnv] = useState("");
@@ -649,9 +705,23 @@ export default function CediaPage() {
     if (!canView) return;
     setLoading(true);
     setError("");
-    listCediaVms()
-      .then(({ data }) => {
-        const records = Array.isArray(data?.record) ? data.record : data?.records || [];
+    setSnapshotMessage("");
+    getCediaSnapshot()
+      .then((snapshot) => {
+        if (snapshot?.empty) {
+          setVms([]);
+          setSnapshotMessage("Esperando snapshot");
+          setSnapshotGeneratedAt(null);
+          setSnapshotSource(null);
+          setSnapshotStale(false);
+          setSnapshotStaleReason(null);
+          return;
+        }
+        setSnapshotGeneratedAt(snapshot?.generated_at || null);
+        setSnapshotSource(snapshot?.source || null);
+        setSnapshotStale(Boolean(snapshot?.stale));
+        setSnapshotStaleReason(snapshot?.stale_reason || null);
+        const records = Array.isArray(snapshot?.data?.cedia) ? snapshot.data.cedia : [];
         setVms(records);
       })
       .catch((err) => {
@@ -660,7 +730,6 @@ export default function CediaPage() {
       })
       .finally(() => setLoading(false));
   }, [canView]);
-
   useEffect(() => {
     fetchList();
   }, [fetchList]);
@@ -756,6 +825,20 @@ export default function CediaPage() {
     });
   }, [normalized, search, filterStatus, filterEnv, filterOs]);
 
+  const mergedFiltered = useMemo(
+    () =>
+      filtered.map((vm) => {
+        const extra = enriched[vm.id] || {};
+        const disks = Array.isArray(extra.disks) && extra.disks.length ? extra.disks : vm.disks;
+        const networks = Array.isArray(extra.networks) && extra.networks.length ? extra.networks : vm.networks;
+        const nics = Array.isArray(extra.nics) && extra.nics.length ? extra.nics : vm.nics;
+        const cpuPct = extra.cpu_usage_pct ?? vm.cpu_usage_pct;
+        const ramPct = extra.ram_usage_pct ?? vm.ram_usage_pct;
+        return { ...vm, ...extra, disks, networks, nics, cpu_usage_pct: cpuPct, ram_usage_pct: ramPct };
+      }),
+    [filtered, enriched]
+  );
+
   const summary = useMemo(() => {
     const total = filtered.length;
     const poweredOn = filtered.filter((vm) => vm.power_state === "POWERED_ON").length;
@@ -817,6 +900,12 @@ export default function CediaPage() {
           <p className="mt-2 text-sm text-gray-600">VMs consultadas en vCloud (puyu).</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <InventoryMetaBar
+            generatedAt={snapshotGeneratedAt}
+            source={snapshotSource}
+            stale={snapshotStale}
+            staleReason={snapshotStaleReason}
+          />
           <input
             aria-label="Buscar en CEDIA"
             id="cedia-search"
@@ -875,12 +964,13 @@ export default function CediaPage() {
             Refrescar
           </button>
           <button
-            aria-label="Exportar CEDIA a CSV"
-            onClick={() => exportInventoryCsv(filtered, "cedia_inventory")}
-            disabled={!filtered.length}
+            aria-label="Exportar CEDIA a XLSX"
+            onClick={() => exportCediaInventoryXlsx(mergedFiltered, "cedia_inventory")}
+            disabled={!mergedFiltered.length || loading || enriching}
             className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm transition hover:border-teal-600 hover:text-teal-700 disabled:opacity-60"
           >
-            ⬇️ Exportar CSV
+            {enriching ? <span className="animate-spin">⏳</span> : "⬇️"}
+            Exportar XLSX
           </button>
         </div>
       </div>
@@ -926,7 +1016,13 @@ export default function CediaPage() {
         </div>
       )}
 
-      {!loading && !error && (
+      {snapshotMessage && !loading && !error && (
+        <div className="rounded-lg border border-gray-200 bg-white p-4 text-sm text-gray-600 shadow">
+          {snapshotMessage}
+        </div>
+      )}
+
+      {!loading && !error && !snapshotMessage && (
         <div className="overflow-x-auto rounded-2xl border border-gray-200 bg-white shadow">
           <table className="min-w-full divide-y divide-gray-200 text-sm">
             <thead className="bg-gray-50">
@@ -947,28 +1043,25 @@ export default function CediaPage() {
                   </td>
                 </tr>
               ) : (
-                filtered.map((vm) => {
-                  const merged = { ...vm, ...(enriched[vm.id] || {}) };
-                  return (
-                    <tr key={vm._rowId} className="hover:bg-gray-50">
-                      {columnsVMware.map((col) => (
-                        <td key={`${vm._rowId}-${col.key}`} className="px-3 py-2">
-                          {col.render(merged)}
-                        </td>
-                      ))}
-                      <td className="px-3 py-2 text-right">
-                        <button
-                          type="button"
-                          onClick={() => openDetail(vm)}
-                          aria-label={`Ver detalle de ${vm.name}`}
-                          className="rounded border border-gray-300 px-3 py-1 text-xs font-semibold text-gray-700 transition hover:border-teal-600 hover:text-teal-700"
-                        >
-                          Ver detalle
-                        </button>
+                mergedFiltered.map((vm) => (
+                  <tr key={vm._rowId} className="hover:bg-gray-50">
+                    {columnsVMware.map((col) => (
+                      <td key={`${vm._rowId}-${col.key}`} className="px-3 py-2">
+                        {col.render(vm)}
                       </td>
-                    </tr>
-                  );
-                })
+                    ))}
+                    <td className="px-3 py-2 text-right">
+                      <button
+                        type="button"
+                        onClick={() => openDetail(vm)}
+                        aria-label={`Ver detalle de ${vm.name}`}
+                        className="rounded border border-gray-300 px-3 py-1 text-xs font-semibold text-gray-700 transition hover:border-teal-600 hover:text-teal-700"
+                      >
+                        Ver detalle
+                      </button>
+                    </td>
+                  </tr>
+                ))
               )}
             </tbody>
           </table>

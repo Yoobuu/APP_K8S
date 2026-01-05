@@ -1,17 +1,105 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useCallback, useRef } from 'react'
 import { IoServerSharp, IoSwapHorizontalSharp } from 'react-icons/io5'
-import { getHypervHosts } from '../api/hypervHosts'
+import { getHypervHosts, getHypervSnapshot, postHypervRefresh, getHypervConfig } from '../api/hypervHosts'
 import { normalizeHypervHostSummary } from '../lib/normalizeHypervHost'
 import { useInventoryState } from './VMTable/useInventoryState'
+import api from '../api/axios'
+import { useAuth } from '../context/AuthContext'
+import InventoryMetaBar from './common/InventoryMetaBar'
 
 const AUTO_REFRESH_MS = 5 * 60 * 1000
 const gradientBg = 'bg-gradient-to-br from-slate-900 via-black to-slate-950'
 const cardColors = ['from-blue-500/30', 'from-cyan-500/30', 'from-indigo-500/30', 'from-emerald-500/30']
 
-const hostFetcher = async ({ refresh } = {}) => {
-  const params = refresh ? { refresh: true } : undefined
-  const data = await getHypervHosts(params)
-  return Array.isArray(data) ? data : data.results || []
+const hostFetcherFactory = ({ hostsState, snapshotState, bannerState, discoverHosts, setStatus, setSnapshotGeneratedAt, setSnapshotSource, setSnapshotStale, setSnapshotStaleReason, isSuperadmin, useLegacyRef, initialRefreshRef, setJobId, setPolling }) => {
+  return async ({ refresh } = {}) => {
+    const params = refresh ? { refresh: true } : undefined
+    const hs = hostsState.current.length ? hostsState.current : await discoverHosts()
+    if (!hs.length) return []
+    try {
+      setStatus({ kind: 'info', text: 'Cargando snapshot hosts...' })
+      const snap = await getHypervSnapshot('hosts', hs, 'summary')
+      if (!snap || typeof snap !== 'object') {
+        const err = new Error('snapshot_empty')
+        err.response = { status: 204 }
+        throw err
+      }
+      if (snap && Array.isArray(snap.data)) {
+        snapshotState.current = snap
+        bannerState.current = buildBannerFromSnapshot(snap)
+        setSnapshotGeneratedAt(snap.generated_at || null)
+        setSnapshotSource(snap.source || null)
+        setSnapshotStale(Boolean(snap.stale))
+        setSnapshotStaleReason(snap.stale_reason || null)
+        setStatus({ kind: 'success', text: `Snapshot hosts ${new Date(snap.generated_at).toLocaleTimeString()}` })
+        return snap.data
+      }
+    } catch (err) {
+      const status = err?.response?.status
+      if (status === 401) throw err
+      if (status !== 204) {
+        // fall through to legacy
+      }
+    }
+    if (isSuperadmin && !initialRefreshRef.current) {
+      initialRefreshRef.current = true
+      setSnapshotGeneratedAt(null)
+      setSnapshotSource(null)
+      setSnapshotStale(false)
+      setSnapshotStaleReason(null)
+      setStatus({ kind: 'info', text: 'Snapshot no disponible: generando snapshot inicial (hosts)...' })
+      try {
+        const resp = await postHypervRefresh({ scope: 'hosts', hosts: hs, level: 'summary', force: false })
+        if (resp?.job_id) {
+          setJobId(resp.job_id)
+          setPolling(true)
+          return []
+        }
+      } catch (e) {
+        setStatus({ kind: 'error', text: 'No se pudo generar snapshot inicial (hosts)' })
+      }
+    }
+    if (!isSuperadmin && !useLegacyRef.current) {
+      setSnapshotGeneratedAt(null)
+      setSnapshotSource(null)
+      setSnapshotStale(false)
+      setSnapshotStaleReason(null)
+      setStatus({ kind: 'warning', text: 'Snapshot aún no generado; espera al refresh del superadmin' })
+      throw new Error('Snapshot no disponible')
+    }
+    if (useLegacyRef.current && isSuperadmin) {
+      setSnapshotGeneratedAt(null)
+      setSnapshotSource(null)
+      setSnapshotStale(false)
+      setSnapshotStaleReason(null)
+      setStatus({ kind: 'info', text: 'Snapshot no disponible: modo legacy (hosts)...' })
+      const data = await getHypervHosts(params)
+      const list = Array.isArray(data) ? data : data.results || []
+      if (!hostsState.current.length) {
+        hostsState.current = Array.from(new Set(list.map((h) => (h.host || h.name || '').toLowerCase()).filter(Boolean))).sort()
+      }
+      snapshotState.current = null
+      bannerState.current = null
+      return list
+    }
+    throw new Error('Snapshot no disponible')
+  }
+}
+
+const buildBannerFromSnapshot = (snap) => {
+  const errors = []
+  Object.entries(snap.hosts_status || {}).forEach(([h, st]) => {
+    if (!st?.state) return
+    if (st.state !== 'ok') errors.push(`${h}: ${st.state}`)
+  })
+  if (snap.stale || errors.length) {
+    return {
+      kind: 'warning',
+      title: 'Inventario parcial',
+      details: errors,
+    }
+  }
+  return null
 }
 
 const hostSummaryBuilder = (items) => {
@@ -25,9 +113,93 @@ const hostSummaryBuilder = (items) => {
 
 export default function HyperVHostsPage() {
   const [selected, setSelected] = useState(null)
+  const hostsRef = useRef([])
+  const snapshotRef = useRef(null)
+  const bannerRef = useRef(null)
+  const [banner, setBanner] = useState(null)
+  const [snapshotGeneratedAt, setSnapshotGeneratedAt] = useState(null)
+  const [snapshotSource, setSnapshotSource] = useState(null)
+  const [snapshotStale, setSnapshotStale] = useState(false)
+  const [snapshotStaleReason, setSnapshotStaleReason] = useState(null)
+  const [jobId, setJobId] = useState(null)
+  const [polling, setPolling] = useState(false)
+  const pollRef = useRef(null)
+  const { hasPermission } = useAuth()
+  const isSuperadmin = hasPermission('jobs.trigger')
+  const [status, setStatus] = useState(null)
+  const initialRefreshRef = useRef(false)
+  const useLegacyRef = useRef(false)
+
+const discoverHosts = useCallback(async () => {
+    if (hostsRef.current.length) return hostsRef.current
+    try {
+      setStatus({ kind: 'info', text: 'Descubriendo hosts (config)...' })
+      const cfg = await getHypervConfig()
+      const hs = Array.isArray(cfg?.hosts)
+        ? cfg.hosts.map((h) => (h || '').trim().toLowerCase()).filter(Boolean).sort()
+        : []
+      if (hs.length) {
+        console.log('[HyperVHosts] hosts discover via /hyperv/config', hs)
+        hostsRef.current = hs
+        return hs
+      }
+    } catch (err) {
+      console.warn('[HyperVHosts] config discovery failed', err)
+    }
+    try {
+      setStatus({ kind: 'info', text: 'Descubriendo hosts (hosts)...' })
+      const data = await getHypervHosts()
+      const list = Array.isArray(data?.results) ? data.results : Array.isArray(data) ? data : []
+      const hs = Array.from(
+        new Set(
+          list
+            .map((h) => (h.host || h.name || '').trim().toLowerCase())
+            .filter(Boolean)
+        )
+      ).sort()
+      if (hs.length) {
+        console.log('[HyperVHosts] hosts discover via /hyperv/hosts', hs)
+        hostsRef.current = hs
+        return hs
+      }
+    } catch (err) {
+      // fallback
+    }
+    try {
+      setStatus({ kind: 'info', text: 'Descubriendo hosts (vms/batch)...' })
+      const { data } = await api.get('/hyperv/vms/batch')
+      const payload = data?.results
+      if (payload && typeof payload === 'object') {
+        const hs = Object.keys(payload).map((h) => h.trim().toLowerCase()).filter(Boolean).sort()
+        console.log('[HyperVHosts] hosts discover via /hyperv/vms/batch', hs)
+        hostsRef.current = hs
+        return hs
+      }
+    } catch (err) {
+      // ignore
+    }
+    setStatus({ kind: 'error', text: 'No se encontraron hosts para Hyper-V' })
+    return []
+  }, [])
+
   const { state, actions } = useInventoryState({
     provider: 'hyperv-hosts',
-    fetcher: hostFetcher,
+    fetcher: hostFetcherFactory({
+      hostsState: hostsRef,
+      snapshotState: snapshotRef,
+      bannerState: bannerRef,
+      discoverHosts,
+      setStatus,
+      setSnapshotGeneratedAt,
+      setSnapshotSource,
+      setSnapshotStale,
+      setSnapshotStaleReason,
+      isSuperadmin,
+      useLegacyRef,
+      initialRefreshRef,
+      setJobId,
+      setPolling,
+    }),
     normalizeRecord: normalizeHypervHostSummary,
     summaryBuilder: hostSummaryBuilder,
     initialGroup: 'cluster',
@@ -50,7 +222,6 @@ export default function HyperVHostsPage() {
     processed,
     groups,
   } = state
-
   const {
     setFilter,
     setGroupByOption,
@@ -64,6 +235,119 @@ export default function HyperVHostsPage() {
   const entries = useMemo(() => Object.entries(groups), [groups])
   const hasGroups = entries.length > 0
   const fallbackRows = !hasGroups && hosts.length > 0 ? hosts : null
+  const statusNode = status ? (
+    <div className={`mb-2 rounded-lg border px-3 py-1 text-xs ${status.kind === 'warning' ? 'border-amber-400/60 bg-amber-500/10 text-amber-200' : status.kind === 'error' ? 'border-red-400/60 bg-red-500/10 text-red-200' : status.kind === 'success' ? 'border-emerald-400/60 bg-emerald-500/10 text-emerald-200' : 'border-cyan-400/60 bg-cyan-500/10 text-cyan-200'}`}>
+      {status.text}
+    </div>
+  ) : null
+  const bannerNode = useMemo(() => {
+    const bannerToUse = banner || bannerRef.current
+    if (!bannerToUse) return null
+    return (
+      <div className={`mb-4 rounded-lg border px-3 py-2 text-sm ${bannerToUse.kind === 'warning' ? 'border-amber-400/60 bg-amber-500/10 text-amber-200' : bannerToUse.kind === 'error' ? 'border-red-400/60 bg-red-500/10 text-red-200' : 'border-cyan-400/60 bg-cyan-500/10 text-cyan-200'}`}>
+        <div className="font-semibold">{bannerToUse.title}</div>
+        {bannerToUse.details && bannerToUse.details.length > 0 && (
+          <ul className="list-disc pl-5">
+            {bannerToUse.details.map((d) => (
+              <li key={d}>{d}</li>
+            ))}
+          </ul>
+        )}
+      </div>
+    )
+  }, [banner])
+
+  useEffect(() => {
+    setBanner(bannerRef.current || null)
+  }, [lastFetchTs])
+
+  const handleRefresh = useCallback(async () => {
+    if (!isSuperadmin) {
+      fetchVm({ refresh: true, showLoading: false })
+      return
+    }
+    const hs = hostsRef.current.length ? hostsRef.current : await discoverHosts()
+    if (!hs.length) {
+      fetchVm({ refresh: true, showLoading: false })
+      return
+    }
+    try {
+      const resp = await postHypervRefresh({ scope: 'hosts', hosts: hs, level: 'summary', force: false })
+      if (resp?.message === 'cooldown_active') {
+        setBanner({
+          kind: 'info',
+          title: 'Cooldown activo',
+          details: [`Próximo refresh después de ${resp.cooldown_until || 'intervalo mínimo'}`],
+        })
+        setStatus({ kind: 'info', text: `Cooldown activo hasta ${resp.cooldown_until || ''}` })
+        return
+      }
+      if (resp?.job_id) {
+        setJobId(resp.job_id)
+        setPolling(true)
+        setStatus({ kind: 'info', text: 'Refrescando inventario (job en curso)...' })
+      }
+    } catch (err) {
+      const status = err?.response?.status
+      if (status === 401) throw err
+        if (status === 403) {
+        setStatus({ kind: 'error', text: 'Sin permisos para refrescar Hyper-V' })
+        setBanner({
+          kind: 'error',
+          title: 'No se pudo iniciar refresh',
+          details: ['Permisos insuficientes'],
+        })
+        return
+      }
+      setBanner({
+        kind: 'error',
+        title: 'No se pudo iniciar refresh',
+        details: [err?.message || 'Error desconocido'],
+      })
+      setStatus({ kind: 'error', text: 'Error iniciando refresh' })
+      fetchVm({ refresh: true, showLoading: false })
+    }
+  }, [discoverHosts, fetchVm, isSuperadmin])
+
+  useEffect(() => {
+    if (!jobId || !polling) return undefined
+    const tick = async () => {
+      try {
+        const { data } = await api.get(`/hyperv/jobs/${jobId}`)
+        const terminal = ['succeeded', 'failed', 'expired'].includes(data.status)
+        const errors = []
+        Object.entries(data.hosts_status || {}).forEach(([h, st]) => {
+          if (st?.state && st.state !== 'ok') errors.push(`${h}: ${st.state}`)
+        })
+        if (errors.length || data.message === 'partial') {
+          setBanner({
+            kind: 'warning',
+            title: 'Refresh parcial',
+            details: errors,
+          })
+          setStatus({ kind: 'warning', text: 'Refresh parcial' })
+        }
+        if (terminal) {
+          setPolling(false)
+          setJobId(null)
+          setStatus({ kind: 'success', text: 'Refresh completado, recargando snapshot...' })
+          await fetchVm({ refresh: false, showLoading: false })
+        }
+      } catch (err) {
+        setPolling(false)
+        setJobId(null)
+        setStatus({ kind: 'error', text: 'Error durante polling del job' })
+      }
+    }
+    tick()
+    const id = setInterval(tick, 2500)
+    pollRef.current = id
+    return () => clearInterval(id)
+  }, [jobId, polling, fetchVm])
+
+  useEffect(() => {
+    setBanner(bannerRef.current)
+  }, [bannerRef.current])
 
   const kpiCards = [
     { label: 'Hosts Hyper-V', value: resumen.total || 0, icon: IoServerSharp },
@@ -184,16 +468,27 @@ export default function HyperVHostsPage() {
   return (
     <div className={`${gradientBg} min-h-screen text-white`}>
       <div className="mx-auto max-w-6xl space-y-6 px-4 py-6 sm:px-8">
+        {statusNode}
+        {bannerNode}
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <h2 className="text-3xl font-bold text-blue-300 drop-shadow">Hosts Hyper-V</h2>
             <p className="text-sm text-neutral-300">Inventario de hosts Hyper-V con recursos básicos y switches.</p>
           </div>
-          <div className="flex items-center gap-3 text-xs text-neutral-300">
+          <div className="flex flex-col items-end gap-2 text-xs text-neutral-300">
             {refreshing && <span className="text-cyan-300">Actualizando…</span>}
-            {lastFetchTs && <span>Última actualización {new Date(lastFetchTs).toLocaleString()}</span>}
+            <InventoryMetaBar
+              generatedAt={snapshotGeneratedAt}
+              source={snapshotSource}
+              lastFetchTs={lastFetchTs}
+              stale={snapshotStale}
+              staleReason={snapshotStaleReason}
+              className="items-end text-right"
+              textClassName="text-xs text-neutral-300"
+              badgeClassName="border-amber-400/60 text-amber-200 bg-amber-500/10"
+            />
             <button
-              onClick={() => fetchVm({ refresh: true, showLoading: false })}
+              onClick={handleRefresh}
               className="rounded-lg border border-blue-400/60 px-3 py-1.5 text-sm font-semibold text-blue-200 hover:bg-blue-400/10"
             >
               Refrescar

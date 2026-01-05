@@ -18,6 +18,7 @@ export default function Navbar() {
   if (hasPermission("notifications.view")) links.push({ to: "/notifications", label: "Notificaciones" });
   if (hasPermission("audit.view")) links.push({ to: "/audit", label: "Auditoría" });
   if (hasPermission("users.manage")) links.push({ to: "/users", label: "Usuarios" });
+  if (hasPermission("system.settings.view")) links.push({ to: "/system", label: "Sistema" });
 
   return (
     <nav className="sticky top-0 z-50 w-full border-b border-white/10 bg-neutral-950/80 backdrop-blur text-white">

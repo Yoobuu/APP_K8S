@@ -36,6 +36,17 @@ class Config:
     csv_dir: Optional[str]
     debug: bool
     env_file_used: Optional[str]
+    # vFileInfo options
+    fileinfo_enabled: bool
+    fileinfo_max_datastores: int
+    fileinfo_max_files_per_datastore: int
+    fileinfo_path: str
+    fileinfo_timeout_sec: int
+    fileinfo_include_pattern: Optional[str]
+    fileinfo_exclude_pattern: Optional[str]
+    # vHealth options
+    health_events_enabled: bool
+    health_events_max_per_host: int
 
 
 def _env_bool(value: Optional[str]) -> bool:
@@ -62,6 +73,20 @@ def parse_args() -> argparse.Namespace:
         dest="env_file",
         help="Ruta a archivo .env (si no se especifica, se autodetecta)",
     )
+    
+    # vFileInfo flags
+    parser.add_argument("--fileinfo-enabled", action="store_true", help="Habilita escaneo de datastore files (lento)")
+    parser.add_argument("--fileinfo-max-datastores", type=int, default=3, help="Max datastores a escanear")
+    parser.add_argument("--fileinfo-max-files-per-datastore", type=int, default=200, help="Max archivos por datastore")
+    parser.add_argument("--fileinfo-path", default="/", help="Path raiz para buscar")
+    parser.add_argument("--fileinfo-timeout-sec", type=int, default=30, help="Timeout segundos por datastore search")
+    parser.add_argument("--fileinfo-include-pattern", help="Regex para incluir archivos")
+    parser.add_argument("--fileinfo-exclude-pattern", help="Regex para excluir archivos")
+
+    # vHealth flags
+    parser.add_argument("--health-events-enabled", action="store_true", help="Habilita consulta de EventManager para vHealth")
+    parser.add_argument("--health-events-max-per-host", type=int, default=30, help="Max eventos recientes por host")
+
     return parser.parse_args()
 
 
@@ -183,4 +208,13 @@ def load_config(args: argparse.Namespace) -> Config:
         csv_dir=csv_dir,
         debug=debug,
         env_file_used=str(env_file) if env_file else None,
+        fileinfo_enabled=args.fileinfo_enabled,
+        fileinfo_max_datastores=args.fileinfo_max_datastores,
+        fileinfo_max_files_per_datastore=args.fileinfo_max_files_per_datastore,
+        fileinfo_path=args.fileinfo_path,
+        fileinfo_timeout_sec=args.fileinfo_timeout_sec,
+        fileinfo_include_pattern=args.fileinfo_include_pattern,
+        fileinfo_exclude_pattern=args.fileinfo_exclude_pattern,
+        health_events_enabled=args.health_events_enabled,
+        health_events_max_per_host=args.health_events_max_per_host,
     )

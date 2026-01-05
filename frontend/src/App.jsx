@@ -14,6 +14,7 @@ import AuditPage from "./pages/AuditPage";
 import NotificationsPage from "./pages/NotificationsPage";
 import HyperVHostsPage from "./components/HyperVHostsPage";
 import CediaPage from "./components/CediaPage";
+import SystemPage from "./pages/SystemPage";
 
 export default function App() {
   return (
@@ -35,6 +36,7 @@ function AppRoutes() {
   const canViewNotifications = hasPermission("notifications.view");
   const canViewAudit = hasPermission("audit.view");
   const canManageUsers = hasPermission("users.manage");
+  const canViewSystemSettings = hasPermission("system.settings.view");
 
   return (
     <Routes>
@@ -245,6 +247,27 @@ function AppRoutes() {
             ) : (
               <AppLayout>
                 <AccessDenied description="Necesitas el permiso users.manage para acceder." />
+              </AppLayout>
+            )
+          ) : (
+            <Navigate to="/login" replace />
+          )
+        }
+      />
+
+      <Route
+        path="/system"
+        element={
+          isAuthenticated ? (
+            enforcePasswordChange ? (
+              <Navigate to="/change-password" replace />
+            ) : canViewSystemSettings ? (
+              <AppLayout>
+                <SystemPage />
+              </AppLayout>
+            ) : (
+              <AppLayout>
+                <AccessDenied description="Necesitas el permiso system.settings.view para acceder." />
               </AppLayout>
             )
           ) : (

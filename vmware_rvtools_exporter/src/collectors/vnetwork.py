@@ -15,27 +15,57 @@ VM_PROPERTIES = [
 ]
 
 
-def _resolve_network_name(device, resolver: InventoryResolver) -> str:
+def _resolve_network_and_switch(
+    device, resolver: InventoryResolver, host_ref
+) -> tuple[str, str]:
     backing = getattr(device, "backing", None)
     if backing is None:
-        return ""
+        return "", ""
 
     if isinstance(backing, vim.vm.device.VirtualEthernetCard.NetworkBackingInfo):
         if getattr(backing, "deviceName", None):
-            return backing.deviceName
-        network = getattr(backing, "network", None)
-        return network.name if network else ""
+            network_name = backing.deviceName
+        else:
+            network = getattr(backing, "network", None)
+            network_name = network.name if network else ""
+        network_moid = ""
+        try:
+            network_ref = getattr(backing, "network", None)
+            if network_ref and hasattr(network_ref, "_GetMoId"):
+                network_moid = network_ref._GetMoId()
+        except Exception:
+            network_moid = ""
+        switch_name = resolver.resolve_vswitch_for_portgroup(
+            host_ref, network_name, network_moid
+        )
+        return network_name, switch_name
 
     if isinstance(
         backing, vim.vm.device.VirtualEthernetCard.DistributedVirtualPortBackingInfo
     ):
         port = getattr(backing, "port", None)
         portgroup_key = getattr(port, "portgroupKey", "") if port else ""
-        return resolver.resolve_dvportgroup_name(portgroup_key)
+        switch_uuid = getattr(port, "switchUuid", "") if port else ""
+        switch_name = resolver.resolve_dvs_name_for_portgroup(portgroup_key)
+        if not switch_name:
+            switch_name = resolver.resolve_dvs_name_by_uuid(switch_uuid)
+        return resolver.resolve_dvportgroup_name(portgroup_key), switch_name
 
     if hasattr(backing, "opaqueNetworkName"):
-        return getattr(backing, "opaqueNetworkName", "")
+        return getattr(backing, "opaqueNetworkName", ""), ""
 
+    return "", ""
+
+
+def _resolve_direct_path(backing) -> str:
+    passthrough = getattr(backing, "inPassthroughMode", None)
+    if passthrough is not None:
+        return str(passthrough)
+    sriov_backing = getattr(backing, "sriovBacking", None)
+    if sriov_backing is not None:
+        enabled = getattr(sriov_backing, "allowGuestVlan", None)
+        if enabled is not None:
+            return str(enabled)
     return ""
 
 
@@ -82,24 +112,35 @@ def collect(context: CollectorContext):
 
             diagnostics.add_attempt("vNetwork")
             try:
-                network_name = _resolve_network_name(device, resolver)
+                network_name, switch_name = _resolve_network_and_switch(
+                    device, resolver, host_ref
+                )
+                direct_path_io = _resolve_direct_path(getattr(device, "backing", None))
                 connectable = getattr(device, "connectable", None)
                 connected = getattr(connectable, "connected", "") if connectable else ""
                 start_connected = getattr(connectable, "startConnected", "") if connectable else ""
                 
+                label = getattr(device.deviceInfo, "label", "") if device.deviceInfo else ""
+                address_type = getattr(device, "addressType", "") or ""
+                adapter_type = device.__class__.__name__ or ""
+                if adapter_type.startswith("Virtual"):
+                    adapter_type = adapter_type[len("Virtual") :]
+                internal_sort = f"{name} {label}".strip()
                 row = {
                     "VM": name,
                     "Powerstate": str(power_state) if power_state is not None else "",
                     "Template": template,
+                    "NIC label": label,
                     "Network": network_name,
                     "PortGroup": network_name,
-                    "Adapter": getattr(device.deviceInfo, "label", "")
-                    if device.deviceInfo
-                    else "",
-                    "MAC": getattr(device, "macAddress", ""),
+                    "Switch": switch_name,
+                    "Adapter": adapter_type,
+                    "Mac Address": getattr(device, "macAddress", ""),
                     "Connected": str(connected),
                     "Starts Connected": str(start_connected),
-                    "Type": device.__class__.__name__,
+                    "Type": address_type,
+                    "Direct Path IO": direct_path_io,
+                    "Internal Sort Column": internal_sort,
                     "Host": host_name,
                     "Cluster": cluster,
                     "Datacenter": datacenter,

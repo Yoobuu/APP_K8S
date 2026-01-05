@@ -221,6 +221,8 @@ SCHEMAS = {
         "vSwitch",
         "MTU",
         "Speed",
+        "Driver",
+        "PCI",
     ],
     "vSwitch": [
         "Host",
@@ -279,6 +281,8 @@ SCHEMAS = {
         "FaultTolerance",
         "Provisioning",
         "Storage",
+        "MTU",
+        "MAC",
     ],
     "vDatastore": [
         "Datastore",

@@ -1,20 +1,16 @@
 from __future__ import annotations
 
 import logging
-import os
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from app.notifications.service import VmSample
 from app.providers.hyperv.remote import RemoteCreds
 from app.providers.hyperv.schema import DiskInfo, VMRecord
-from app.vms.hyperv_router import _load_ps_content, _parse_hosts_env
+from app.vms.hyperv_router import _load_ps_content
 from app.vms.hyperv_service import collect_hyperv_inventory_for_host
 from app.vms.vm_service import fetch_vmware_snapshot
-try:
-    from app.main import TEST_MODE
-except Exception:
-    TEST_MODE = False
+from app.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -66,9 +62,9 @@ def _build_hyperv_sample(record: VMRecord, observed_at: datetime) -> VmSample:
 def _collect_hyperv_for_host(host: str, refresh: bool, ps_content: str, observed_at: datetime) -> List[VmSample]:
     creds = RemoteCreds(
         host=host,
-        username=os.environ.get("HYPERV_USER"),
-        password=os.environ.get("HYPERV_PASS"),
-        transport=os.environ.get("HYPERV_TRANSPORT", "ntlm"),
+        username=settings.hyperv_user,
+        password=settings.hyperv_pass,
+        transport=settings.hyperv_transport,
         use_winrm=True,
     )
     try:
@@ -85,14 +81,9 @@ def _collect_hyperv_for_host(host: str, refresh: bool, ps_content: str, observed
 
 
 def collect_hyperv_samples(refresh: bool) -> List[VmSample]:
-    if TEST_MODE:
+    if settings.test_mode:
         return []
-    hosts_env = os.environ.get("HYPERV_HOSTS")
-    host_list = _parse_hosts_env(hosts_env) if hosts_env else []
-    if not host_list:
-        single_host = (os.environ.get("HYPERV_HOST") or "").strip()
-        if single_host:
-            host_list = [single_host]
+    host_list = settings.hyperv_hosts_configured
 
     if not host_list:
         return []
@@ -118,7 +109,7 @@ def collect_hyperv_samples(refresh: bool) -> List[VmSample]:
 
 
 def collect_vmware_samples(refresh: bool) -> List[VmSample]:
-    if TEST_MODE:
+    if settings.test_mode:
         return []
     try:
         snapshots = fetch_vmware_snapshot(refresh=refresh)

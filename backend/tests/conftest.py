@@ -19,6 +19,7 @@ from app.dependencies import (
 from app.main import app
 from app.notifications.models import Notification  # noqa: F401
 from app.permissions.models import Permission, RolePermission, UserPermission  # noqa: F401
+from app.system_settings.models import SystemSettings  # noqa: F401
 
 
 @pytest.fixture(scope="function")

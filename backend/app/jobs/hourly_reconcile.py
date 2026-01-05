@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import os
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -17,20 +16,12 @@ from app.notifications.reconciler import (
 )
 from app.notifications.sampler import collect_all_samples
 from app.notifications.service import evaluate_batch
+from app.settings import settings
 
 logger = logging.getLogger(__name__)
 
-ENABLED_VALUES = {"1", "true", "yes", "on"}
-
-
 def _is_autoclear_enabled() -> bool:
-    explicit = os.getenv("NOTIFS_AUTOCLEAR_ENABLED")
-    if explicit is not None:
-        return explicit.strip().lower() in ENABLED_VALUES
-
-    if os.getenv("TESTING") == "1":
-        return False
-    return True
+    return settings.notifs_autoclear_enabled
 
 
 def _build_anomalies(refresh: bool) -> List[NotificationLike]:

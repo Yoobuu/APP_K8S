@@ -5,6 +5,7 @@ from pyVmomi import vim
 from .context import CollectorContext
 from ..property_fetch import fetch_vms
 from ..resolvers import InventoryResolver
+from ..utils.custom_fields import extract_backup_fields, load_custom_field_map
 from ..utils.vm_meta import apply_vm_meta, get_vi_sdk_meta, get_vm_meta
 
 
@@ -14,6 +15,7 @@ VM_PROPERTIES = [
     "runtime.host",
     "config.template",
     "config.hardware.device",
+    "customValue",
 ]
 
 
@@ -43,6 +45,16 @@ def _bool_to_rvtools(value) -> str:
     return "TRUE" if bool(value) else "FALSE"
 
 
+def _enum_to_str(value) -> str:
+    if value is None or value == "":
+        return ""
+    if hasattr(value, "value"):
+        return str(value.value)
+    if hasattr(value, "name"):
+        return str(value.name)
+    return str(value)
+
+
 def _is_raw_backing(backing) -> Optional[bool]:
     if backing is None:
         return None
@@ -61,6 +73,10 @@ def collect(context: CollectorContext):
         vi_meta = get_vi_sdk_meta(context.service_instance, context.config.server)
         context.shared_data["vi_sdk"] = vi_meta
     vm_meta_by_moid = context.shared_data.get("vm_meta_by_moid", {})
+    field_map = context.shared_data.get("custom_field_map")
+    if field_map is None:
+        field_map = load_custom_field_map(context.content)
+        context.shared_data["custom_field_map"] = field_map
 
     try:
         vm_items = fetch_vms(context.service_instance, VM_PROPERTIES)
@@ -84,6 +100,12 @@ def collect(context: CollectorContext):
         host_ref = props.get("runtime.host")
         template = props.get("config.template", "")
         devices = props.get("config.hardware.device") or []
+        backup_status = ""
+        last_backup = ""
+        if field_map:
+            backup_status, last_backup = extract_backup_fields(
+                props.get("customValue"), field_map
+            )
 
         host_name = resolver.resolve_host_name(host_ref)
         cluster = resolver.resolve_cluster_name(host_ref)
@@ -110,7 +132,11 @@ def collect(context: CollectorContext):
                 disk_uuid = getattr(backing, "uuid", "") if backing else ""
                 disk_key = getattr(device, "key", "")
                 raw_val = _is_raw_backing(backing)
-                sharing_mode = getattr(device, "sharing", "")
+                sharing_mode = ""
+                if backing is not None:
+                    sharing_mode = getattr(backing, "sharing", "") or ""
+                if sharing_mode == "":
+                    sharing_mode = getattr(device, "sharing", "")
                 eagerly_scrub = getattr(backing, "eagerlyScrub", None) if backing else None
                 split = getattr(backing, "split", None) if backing else None
                 write_through = getattr(backing, "writeThrough", None) if backing else None
@@ -149,7 +175,7 @@ def collect(context: CollectorContext):
                     "Disk Path": filename,
                     "Disk Key": disk_key,
                     "Raw": _bool_to_rvtools(raw_val) if raw_val is not None else "",
-                    "Sharing mode": str(sharing_mode) if sharing_mode != "" else "",
+                    "Sharing mode": _enum_to_str(sharing_mode),
                     "Eagerly Scrub": _bool_to_rvtools(eagerly_scrub),
                     "Split": _bool_to_rvtools(split),
                     "Write Through": _bool_to_rvtools(write_through),
@@ -163,6 +189,8 @@ def collect(context: CollectorContext):
                     "Host": host_name,
                     "Cluster": cluster,
                     "Datacenter": datacenter,
+                    "Backup status": backup_status,
+                    "Last backup": last_backup,
                 }
                 apply_vm_meta(row, vm_meta, vi_meta, include_srm=True)
                 rows.append(row)

@@ -113,9 +113,9 @@ function Get-HVGuestOSFromKVP {
   try {
     $vmGuid = $VM.VMId.Guid
     $cs = Get-CimInstance -Namespace root\virtualization\v2 `
-         -ClassName Msvm_ComputerSystem -Filter "Name='$vmGuid'"
+         -ClassName Msvm_ComputerSystem -Filter "Name='$vmGuid'" -ErrorAction Stop
     if (-not $cs) { return $null }
-    $kvp = Get-CimAssociatedInstance -InputObject $cs -ResultClassName Msvm_KvpExchangeComponent
+    $kvp = Get-CimAssociatedInstance -InputObject $cs -ResultClassName Msvm_KvpExchangeComponent -ErrorAction Stop
     if (-not $kvp) { return $null }
     foreach ($raw in $kvp.GuestIntrinsicExchangeItems) {
       try {
@@ -128,34 +128,78 @@ function Get-HVGuestOSFromKVP {
       } catch {}
     }
     return $null
-  } catch { return $null }
+  } catch { return "Error KVP: $($_.Exception.Message)" }
 }
 
 function Get-Disks($vm) {
   if (-not $DoVhd) { return @() }
   $diskObjs=@()
   try {
-    foreach($hdd in (Get-VMHardDiskDrive -VM $vm)){
-      try {
-        $v=Get-VHD -Path $hdd.Path -ErrorAction Stop
-        $sizeGiB = [math]::Round(($v.Size/1GB),2)
-        $allocGiB= [math]::Round(($v.FileSize/1GB),2)
-        $allocPct= if ($v.Size -gt 0) { [math]::Round(($v.FileSize / $v.Size)*100,2) } else { 0 }
-        $diskObjs+=[pscustomobject]@{
-          SizeGiB      = $sizeGiB
-          AllocatedGiB = $allocGiB
-          AllocatedPct = $allocPct
-        }
-      } catch {}
+    $drives = Get-VMHardDiskDrive -VM $vm -ErrorAction Stop
+  } catch {
+    return @(@{ Display = "Error listing drives: $($_.Exception.Message)"; Error = $_.Exception.Message })
+  }
+
+  foreach($hdd in $drives){
+    $path = $hdd.Path
+    $errorMsg = $null
+    $size = $null
+    $alloc = $null
+    $pct = $null
+    
+    try {
+       if ([string]::IsNullOrWhiteSpace($path)) {
+          $errorMsg = "Path empty (Passthrough?)"
+       } else {
+          # Intento rápido de obtener tamaño de archivo (Allocated)
+          if (Test-Path $path) {
+            $file = Get-Item $path -ErrorAction SilentlyContinue
+            if ($file) { $alloc = [math]::Round(($file.Length/1GB),2) }
+          }
+
+          # [OPTIMIZACION DE EMERGENCIA]
+          # Comentamos Get-VHD porque está causando timeouts de >5min en hosts lentos/saturados.
+          # Solo devolveremos el espacio usado (Allocated).
+          
+          # try {
+          #   $v = Get-VHD -Path $path -ErrorAction Stop
+          #   $size = [math]::Round(($v.Size/1GB),2)
+          #   if ($size -gt 0 -and $alloc -ne $null) {
+          #       $pct = [math]::Round(($alloc / $size)*100,2)
+          #   }
+          # } catch {
+          #   $errorMsg = "VHD Header Unreadable"
+          # }
+       }
+    } catch {
+       $errorMsg = "Error: $($_.Exception.Message)"
     }
-  } catch {}
+    
+    $props = [ordered]@{
+       Path = $path
+       SizeGiB = $size
+       AllocatedGiB = $alloc
+       AllocatedPct = $pct
+       Error = $errorMsg
+    }
+    
+    # Si tenemos al menos el alloc, quitamos el error del display para que se vea el dato
+    if ($alloc -ne $null) {
+       $sizeText = if ($size) { $size } else { "???" }
+       $props['Display'] = "$alloc GB / $sizeText GB"
+    } elseif ($errorMsg) {
+       $props['Display'] = "Error: $errorMsg"
+    }
+
+    $diskObjs += [pscustomobject]$props
+  }
   return $diskObjs
 }
 
-function Get-NICInfo($vm) {
+function Get-NICInfo($vm, $PreLoadedNics=$null) {
   $vlanIds=@(); $ipList=@(); $networks=@()
   try {
-    $nics=Get-VMNetworkAdapter -VM $vm
+    $nics = if ($PreLoadedNics) { $PreLoadedNics } else { Get-VMNetworkAdapter -VM $vm }
     foreach ($nic in $nics) {
       try {
         $vlan=Get-VMNetworkAdapterVlan -VMNetworkAdapter $nic
@@ -177,7 +221,7 @@ function Get-NICInfo($vm) {
 }
 
 function Get-OneVM {
-  param([string]$HVHost,[Microsoft.HyperV.PowerShell.VirtualMachine]$VM)
+  param([string]$HVHost,[Microsoft.HyperV.PowerShell.VirtualMachine]$VM, $PreLoadedNics=$null)
 
   # vCPU y uso CPU (fallback Measure-VM)
   $vCPU = $null; try { $vCPU = (Get-VMProcessor -VM $VM).Count } catch {}
@@ -203,7 +247,7 @@ function Get-OneVM {
   }
 
   # NICs
-  $nicInfo = Get-NICInfo -vm $VM
+  $nicInfo = Get-NICInfo -vm $VM -PreLoadedNics $PreLoadedNics
 
   # Compatibilidad (Version y Generation 1/2)
   $ver=$null; try { $ver=$VM.Version } catch {}
@@ -263,7 +307,24 @@ try {
   } else {
     $vms = Get-VM -ComputerName $HVHost -ErrorAction Stop
   }
-  foreach ($vm in $vms) { $items += Get-OneVM -HVHost $HVHost -VM $vm }
+
+  # Optimization: Pre-fetch NICs to avoid N+1 Get-VMNetworkAdapter calls
+  $allNics = @{}
+  if ($vms) {
+      try {
+         $rawNics = $vms | Get-VMNetworkAdapter -ErrorAction SilentlyContinue
+         foreach ($n in $rawNics) {
+            $nm = $n.VMName
+            if (-not $allNics.ContainsKey($nm)) { $allNics[$nm] = @() }
+            $allNics[$nm] += $n
+         }
+      } catch {}
+  }
+
+  foreach ($vm in $vms) { 
+     $n = if ($allNics.ContainsKey($vm.Name)) { $allNics[$vm.Name] } else { $null }
+     $items += Get-OneVM -HVHost $HVHost -VM $vm -PreLoadedNics $n 
+  }
 } catch {
   Write-Warning "Get-VM en $HVHost falló: $($_.Exception.Message)"
 }

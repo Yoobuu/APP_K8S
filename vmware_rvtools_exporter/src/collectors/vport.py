@@ -5,6 +5,24 @@ from ..resolvers import InventoryResolver
 from ..utils.vm_meta import apply_vm_meta, get_vi_sdk_meta
 
 
+def _to_kbps(value) -> object:
+    if value is None or value == "":
+        return ""
+    try:
+        return int(float(value)) // 1000
+    except Exception:
+        return ""
+
+
+def _to_kbytes(value) -> object:
+    if value is None or value == "":
+        return ""
+    try:
+        return int(float(value)) // 1024
+    except Exception:
+        return ""
+
+
 def collect(context: CollectorContext):
     diagnostics = context.diagnostics
     logger = context.logger
@@ -50,6 +68,9 @@ def collect(context: CollectorContext):
                 mac_changes = ""
                 forged_transmits = ""
                 shaping = ""
+                avg_kbps = ""
+                peak_kbps = ""
+                burst_kb = ""
                 
                 if policy:
                     if hasattr(policy, "security") and policy.security:
@@ -57,8 +78,14 @@ def collect(context: CollectorContext):
                         mac_changes = str(policy.security.macChanges)
                         forged_transmits = str(policy.security.forgedTransmits)
                     
-                    if hasattr(policy, "shaping") and policy.shaping:
-                        shaping = str(policy.shaping.enabled)
+                    shaping_policy = getattr(policy, "shapingPolicy", None)
+                    if shaping_policy:
+                        enabled = getattr(shaping_policy, "enabled", None)
+                        if enabled is not None:
+                            shaping = str(enabled)
+                        avg_kbps = _to_kbps(getattr(shaping_policy, "averageBandwidth", None))
+                        peak_kbps = _to_kbps(getattr(shaping_policy, "peakBandwidth", None))
+                        burst_kb = _to_kbytes(getattr(shaping_policy, "burstSize", None))
 
                 rows.append({
                     "Host": host_name,
@@ -71,6 +98,9 @@ def collect(context: CollectorContext):
                     "MACChanges": mac_changes,
                     "ForgedTransmits": forged_transmits,
                     "TrafficShaping": shaping,
+                    "Width": avg_kbps,
+                    "Peak": peak_kbps,
+                    "Burst": burst_kb,
                 })
                 apply_vm_meta(rows[-1], None, vi_meta)
                 diagnostics.add_success("vPort")

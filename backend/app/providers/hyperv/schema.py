@@ -8,6 +8,9 @@ class DiskInfo(BaseModel):
     AllocatedGiB: Optional[float] = Field(default=None, ge=0)
     # Permitimos >100 porque snapshots/avhdx o contadores pueden inflarlo
     AllocatedPct: Optional[float] = Field(default=None, ge=0)
+    Path: Optional[str] = None
+    Error: Optional[str] = None
+    Display: Optional[str] = None
 
 
 class HWCompat(BaseModel):

@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import argparse
-import os
 from datetime import datetime, timedelta, timezone
 
 from sqlmodel import Session, select
 
 from app.db import get_engine
 from app.notifications.models import Notification, NotificationStatus
+from app.settings import settings
 
 
 def archive_notifications(retention_days: int) -> int:
@@ -36,7 +36,7 @@ def main() -> None:
     parser.add_argument(
         "--days",
         type=int,
-        default=int(os.getenv("NOTIFS_RETENTION_DAYS", "180")),
+        default=settings.notifs_retention_days,
         help="Retention window in days (defaults to env NOTIFS_RETENTION_DAYS or 180).",
     )
     args = parser.parse_args()

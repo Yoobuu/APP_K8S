@@ -3,6 +3,7 @@ from pyVmomi import vim
 from .context import CollectorContext
 from ..property_fetch import fetch_vms, safe_fetch_vms
 from ..resolvers import InventoryResolver
+from ..utils.custom_fields import extract_backup_fields, load_custom_field_map
 from ..utils.vm_meta import apply_vm_meta, get_vi_sdk_meta, get_vm_meta
 
 
@@ -17,45 +18,6 @@ VM_PROPERTIES = [
 ]
 
 
-def _custom_field_map(content) -> dict:
-    mapping = {}
-    if not content:
-        return mapping
-    manager = getattr(content, "customFieldsManager", None)
-    fields = getattr(manager, "field", None) if manager else None
-    if not fields:
-        return mapping
-    for field in fields:
-        key = getattr(field, "key", None)
-        name = getattr(field, "name", None)
-        if key is not None and name:
-            mapping[int(key)] = str(name)
-    return mapping
-
-
-def _extract_backup_fields(custom_values, field_map: dict) -> tuple:
-    backup_status = ""
-    last_backup = ""
-    for entry in custom_values or []:
-        key = getattr(entry, "key", None)
-        value = getattr(entry, "value", None)
-        if key is None:
-            continue
-        name = field_map.get(int(key), "")
-        if not name:
-            continue
-        name_l = name.lower()
-        value_str = str(value) if value is not None else ""
-        if not value_str:
-            continue
-        if not last_backup and ("last backup" in name_l or "lastbackup" in name_l):
-            last_backup = value_str
-            continue
-        if not backup_status:
-            if "backup" in name_l or "veeam" in name_l or "rubrik" in name_l or "commvault" in name_l:
-                backup_status = value_str
-    return backup_status, last_backup
-
 
 def collect(context: CollectorContext):
     diagnostics = context.diagnostics
@@ -68,7 +30,7 @@ def collect(context: CollectorContext):
     vm_meta_by_moid = context.shared_data.get("vm_meta_by_moid", {})
     field_map = context.shared_data.get("custom_field_map")
     if field_map is None:
-        field_map = _custom_field_map(context.content)
+        field_map = load_custom_field_map(context.content)
         context.shared_data["custom_field_map"] = field_map
 
     vm_properties = list(VM_PROPERTIES)
@@ -116,7 +78,7 @@ def collect(context: CollectorContext):
         backup_status = ""
         last_backup = ""
         if field_map:
-            backup_status, last_backup = _extract_backup_fields(
+            backup_status, last_backup = extract_backup_fields(
                 props.get("customValue"), field_map
             )
         

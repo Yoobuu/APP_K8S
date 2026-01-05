@@ -1,4 +1,5 @@
-import React, { useCallback, useMemo, useDeferredValue } from 'react'
+import React, { useCallback, useMemo, useDeferredValue, useState, useEffect } from 'react'
+import { getVmwareSnapshot } from '../api/vmware'
 import { useInventoryState } from './VMTable/useInventoryState'
 import VMSummaryCards from './VMTable/VMSummaryCards'
 import VMFiltersPanel from './VMTable/VMFiltersPanel'
@@ -8,15 +9,56 @@ import VMDetailModal from './VMDetailModal'
 import { columnsVMware } from './inventoryColumns.jsx'
 import { exportInventoryCsv } from '../lib/exportCsv'
 import { normalizeVMware } from '../lib/normalize'
+import InventoryMetaBar from './common/InventoryMetaBar'
+import * as inventoryCache from '../lib/inventoryCache'
 
 const AUTO_REFRESH_MS = 5 * 60 * 1000
+const DEBUG_SNAPSHOT = false
 
 export default function VMTable() {
-  const { state, actions } = useInventoryState({ provider: 'vmware', autoRefreshMs: AUTO_REFRESH_MS })
+  const [snapshotGeneratedAt, setSnapshotGeneratedAt] = useState(null)
+  const [snapshotSource, setSnapshotSource] = useState(null)
+  const [snapshotStale, setSnapshotStale] = useState(false)
+  const [snapshotStaleReason, setSnapshotStaleReason] = useState(null)
+  const [snapshotLoadedFromSnapshot, setSnapshotLoadedFromSnapshot] = useState(false)
+  const snapshotFetcher = useCallback(async () => {
+    const snapshot = await getVmwareSnapshot()
+    if (DEBUG_SNAPSHOT) {
+      const payloadKeys =
+        snapshot && snapshot.data && typeof snapshot.data === 'object'
+          ? Object.keys(snapshot.data)
+          : []
+      console.log('vmware snapshot response', snapshot)
+      console.log('vmware snapshot status empty?', snapshot?.empty)
+      console.log('generated_at', snapshot?.generated_at, 'source', snapshot?.source)
+      console.log('payload keys', payloadKeys)
+    }
+    if (snapshot?.empty) {
+      setSnapshotGeneratedAt(null)
+      setSnapshotSource(null)
+      setSnapshotStale(false)
+      setSnapshotStaleReason(null)
+      setSnapshotLoadedFromSnapshot(false)
+      return { empty: true }
+    }
+    setSnapshotGeneratedAt(snapshot?.generated_at || null)
+    setSnapshotSource(snapshot?.source || null)
+    setSnapshotStale(Boolean(snapshot?.stale))
+    setSnapshotStaleReason(snapshot?.stale_reason || null)
+    setSnapshotLoadedFromSnapshot(true)
+    const payload = snapshot?.data || {}
+    return Array.isArray(payload?.vmware) ? payload.vmware : []
+  }, [])
+  const { state, actions } = useInventoryState({
+    provider: 'vmware',
+    autoRefreshMs: AUTO_REFRESH_MS,
+    fetcher: snapshotFetcher,
+  })
   const {
     vms,
     loading,
     error,
+    emptyMessage,
     filter,
     groupByOption,
     globalSearch,
@@ -50,19 +92,28 @@ export default function VMTable() {
     handlePowerChange,
   } = actions
 
-  console.log(
-    '[VMTable render]',
-    'provider=VMWARE',
-    'vms.length=',
-    vms?.length,
-    'groups keys=',
-    Object.keys(groups || {})
-  )
-
   const entries = useMemo(() => Object.entries(groups), [groups])
   const deferredEntries = useDeferredValue(entries)
   const hasGroups = entries.length > 0
   const fallbackRows = !hasGroups && vms.length > 0 ? vms : null
+
+  useEffect(() => {
+    if (snapshotLoadedFromSnapshot) return
+    if (snapshotGeneratedAt || snapshotSource) return
+    if (!vms.length) return
+    const cachedEntry = inventoryCache.get('vmware')
+    const cachedList = Array.isArray(cachedEntry?.data) ? cachedEntry.data : null
+    if (!cachedList || !cachedList.length) return
+    setSnapshotSource('cache')
+    setSnapshotGeneratedAt(null)
+    setSnapshotStale(false)
+    setSnapshotStaleReason(null)
+  }, [
+    snapshotLoadedFromSnapshot,
+    snapshotGeneratedAt,
+    snapshotSource,
+    vms.length,
+  ])
 
   const handleFilterChange = useCallback(
     (field, value) => {
@@ -127,7 +178,7 @@ export default function VMTable() {
   )
 
   let emptyStateType = null
-  if (!loading && !error && processed.length === 0) {
+  if (!loading && !error && !emptyMessage && processed.length === 0) {
     emptyStateType = hasFilters ? 'filtered' : 'empty'
   } else if (error) {
     emptyStateType = 'error'
@@ -157,19 +208,19 @@ export default function VMTable() {
               Exportar CSV
             </button>
           </div>
-          {(refreshing || lastFetchTs) && (
-            <div className="text-xs text-gray-500 text-right">
-              {refreshing && (
-                <span className="mr-2 text-blue-600 animate-pulse">Actualizando&hellip;</span>
-              )}
-              {lastFetchTs && (
-                <span>
-                  Ultima actualizacion{' '}
-                  {new Date(lastFetchTs).toLocaleString()}
-                </span>
-              )}
+          {refreshing && (
+            <div className="text-xs text-blue-600 animate-pulse text-right">
+              Actualizando&hellip;
             </div>
           )}
+          <InventoryMetaBar
+            generatedAt={snapshotGeneratedAt}
+            source={snapshotSource}
+            lastFetchTs={lastFetchTs}
+            stale={snapshotStale}
+            staleReason={snapshotStaleReason}
+            className="items-end text-right"
+          />
         </div>
       </div>
 
@@ -211,7 +262,11 @@ export default function VMTable() {
         )}
       </div>
 
-      {emptyStateType ? (
+      {emptyMessage && !loading && !error ? (
+        <div className="rounded-lg border border-gray-200 bg-white p-4 text-sm text-gray-600 shadow">
+          {emptyMessage}
+        </div>
+      ) : emptyStateType ? (
         <VMEmptyState type={emptyStateType} onResetFilters={clearFilters} />
       ) : hasGroups ? (
         <VMGroupsTable

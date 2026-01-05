@@ -1,4 +1,4 @@
-﻿import React, { useCallback, useMemo, useDeferredValue, useState } from 'react'
+﻿import React, { useCallback, useMemo, useDeferredValue, useState, useEffect } from 'react'
 
 import { useInventoryState } from './VMTable/useInventoryState'
 import VMSummaryCards from './VMTable/VMSummaryCards'
@@ -8,6 +8,7 @@ import VMEmptyState from './VMTable/VMEmptyState'
 import HyperVDetailModal from './HyperVDetailModal'
 import { columnsHyperV } from './inventoryColumns.jsx'
 import { exportInventoryCsv } from '../lib/exportCsv'
+import InventoryMetaBar from './common/InventoryMetaBar'
 
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // MISMA LOGICA DE AMBIENTE QUE EN EL MODAL
@@ -23,10 +24,10 @@ function classifyFromString(str) {
   // miramos la primera letra de cada token
   for (const tk of tokens) {
     const first = tk.charAt(0)
-    if (first === 'S') return 'sandbox'
-    if (first === 'T') return 'test'
-    if (first === 'P') return 'producciÃ³n'
-    if (first === 'D') return 'desarrollo'
+    if (first === 'S') return 'Sandbox'
+    if (first === 'T') return 'Test'
+    if (first === 'P') return 'Producción'
+    if (first === 'D') return 'Desarrollo'
   }
 
   return null
@@ -64,6 +65,13 @@ export default function HyperVTable({
   searchPlaceholder = 'Buscar por Nombre, SO, Host, Cluster...',
   onExport,
   exportFilenameBase = 'inventory',
+  onErrorChange,
+  refreshBusy = false,
+  refreshCooldownUntil = null,
+  snapshotGeneratedAt = null,
+  snapshotSource = null,
+  snapshotStale = false,
+  snapshotStaleReason = null,
 }) {
   const { state, actions } = useInventoryState({
     fetcher,
@@ -96,7 +104,6 @@ export default function HyperVTable({
     refreshing,
     lastFetchTs,
   } = state
-
   const {
     setFilter,
     setGroupByOption,
@@ -106,15 +113,6 @@ export default function HyperVTable({
     fetchVm,
     onHeaderClick,
   } = actions
-
-  console.log(
-    '[HyperVTable render]',
-    'provider=HYPERV',
-    'vms.length=',
-    vms?.length,
-    'groups keys=',
-    Object.keys(groups || {})
-  )
 
   // ------------------------------
   // clave Ãºnica VM para poder referenciarla luego en el modal
@@ -144,7 +142,6 @@ export default function HyperVTable({
       }
 
       const key = `${row.Name || row.name || ''}::${row.HVHost || row.host || ''}`
-      console.log('[ROW CLICK]', { row })
       setSelectedVm(row)
       setSelectorKey(key)
     },
@@ -178,9 +175,9 @@ export default function HyperVTable({
 
     if (typeof hvhost === 'string' && hvhost.length > 0) {
       const first = hvhost[0].toUpperCase()
-      if (first === 'S') return 'sandbox'
-      if (first === 'T') return 'test'
-      if (first === 'P') return 'produccion'
+      if (first === 'S') return 'Sandbox'
+      if (first === 'T') return 'Test'
+      if (first === 'P') return 'Producción'
     }
 
     return null
@@ -224,16 +221,31 @@ export default function HyperVTable({
     }
   }, [fetchVm, onRefresh])
 
+  const cooldownTs = refreshCooldownUntil ? Date.parse(String(refreshCooldownUntil)) : null
+  const cooldownActive = Number.isFinite(cooldownTs) && cooldownTs > Date.now()
+  const refreshDisabled = cooldownActive || refreshBusy || loading || refreshing
+  const refreshLabel = cooldownActive
+    ? 'Cooldown activo'
+    : refreshBusy || loading || refreshing
+      ? 'Consultando...'
+      : 'Actualizar inventario'
+
   const handleCloseModal = useCallback(() => {
-    console.log('[handleCloseModal] closing modal, clearing selectedVm')
     setSelectedVm(null)
     setSelectorKey('')
   }, [setSelectorKey])
 
+  useEffect(() => {
+    if (onErrorChange) {
+      onErrorChange(error || '')
+    }
+  }, [error, onErrorChange])
+
   let emptyStateType = null
-  if (!loading && !error && processed.length === 0) {
+  const hasRows = processed.length > 0
+  if (!loading && !error && !hasRows) {
     emptyStateType = hasFilters ? 'filtered' : 'empty'
-  } else if (error) {
+  } else if (error && !hasRows) {
     emptyStateType = 'error'
   }
 
@@ -248,9 +260,23 @@ export default function HyperVTable({
           <div className="flex items-center gap-2">
             <button
               onClick={handleRefresh}
-              className="bg-white border border-blue-300 text-blue-700 font-medium py-2 px-4 rounded-lg shadow-sm hover:bg-blue-50 transition"
+              disabled={refreshDisabled}
+              aria-busy={refreshDisabled}
+              title={cooldownActive ? 'Cooldown activo' : 'Actualizar inventario'}
+              className={`inline-flex items-center gap-2 rounded-lg border px-4 py-2 font-medium shadow-sm transition ${
+                refreshDisabled
+                  ? 'cursor-not-allowed border-gray-300 bg-gray-100 text-gray-500'
+                  : 'border-blue-300 bg-white text-blue-700 hover:bg-blue-50'
+              }`}
             >
-              Actualizar inventario
+              {refreshBusy || loading || refreshing ? (
+                <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-blue-600 border-t-transparent"></span>
+              ) : cooldownActive ? (
+                <span className="inline-flex items-center gap-1 text-amber-700">
+                  <span className="h-2 w-2 rounded-full bg-amber-400 animate-pulse"></span>
+                </span>
+              ) : null}
+              {refreshLabel}
             </button>
             <button
               onClick={handleExport}
@@ -260,19 +286,19 @@ export default function HyperVTable({
               Exportar CSV
             </button>
           </div>
-          {(refreshing || lastFetchTs) && (
-            <div className="text-xs text-gray-500 text-right">
-              {refreshing && (
-                <span className="mr-2 text-blue-600 animate-pulse">Actualizando&hellip;</span>
-              )}
-              {lastFetchTs && (
-                <span>
-                  Ultima actualizacion:{' '}
-                  {new Date(lastFetchTs).toLocaleString()}
-                </span>
-              )}
+          {refreshing && (
+            <div className="text-xs text-blue-600 animate-pulse text-right">
+              Actualizando&hellip;
             </div>
           )}
+          <InventoryMetaBar
+            generatedAt={snapshotGeneratedAt}
+            source={snapshotSource}
+            lastFetchTs={lastFetchTs}
+            stale={snapshotStale}
+            staleReason={snapshotStaleReason}
+            className="items-end text-right"
+          />
         </div>
       </div>
 

@@ -45,10 +45,11 @@ class Diagnostics:
     def classify_exception(exc: Exception) -> str:
         if isinstance(exc, vim.fault.NoPermission):
             return "no_permission"
-        invalid_property = [vmodl.fault.InvalidProperty]
-        if hasattr(vim.fault, "InvalidProperty"):
-            invalid_property.append(vim.fault.InvalidProperty)
-        if isinstance(exc, tuple(invalid_property)):
+        invalid_cls = getattr(vim.fault, "InvalidProperty", None)
+        if invalid_cls and isinstance(exc, invalid_cls):
+            return "invalid_property"
+        message = str(exc).lower()
+        if "invalidproperty" in message or "invalid property" in message:
             return "invalid_property"
         not_found = [vmodl.fault.ManagedObjectNotFound]
         if hasattr(vim.fault, "NotFound"):

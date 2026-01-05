@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import api from '../../api/axios'
+import { getVmwareSnapshot } from '../../api/vmware'
 import { normalizeVMware } from '../../lib/normalize'
 import * as inventoryCache from '@/lib/inventoryCache'
 
@@ -111,6 +112,13 @@ const defaultFetch = async ({ provider, refresh } = {}) => {
   } else if (provider === 'hosts') {
     const { data } = await api.get('/hosts', { params })
     return Array.isArray(data) ? data : data.results || []
+  } else if (provider === 'vmware') {
+    const snapshot = await getVmwareSnapshot()
+    if (snapshot?.empty) {
+      return { empty: true }
+    }
+    const payload = snapshot?.data || snapshot
+    return Array.isArray(payload?.vmware) ? payload.vmware : []
   } else {
     const { data } = await api.get('/vms', { params })
     return Array.isArray(data) ? data : data.results || []
@@ -191,6 +199,7 @@ export function useInventoryState(options = {}) {
   const [loading, setLoading] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState('')
+  const [emptyMessage, setEmptyMessage] = useState('')
   const [filter, setFilter] = useState(initialFilterState)
   const [sortBy, setSortBy] = useState({ key: 'name', asc: true })
   const [groupByOption, setGroupByOption] = useState(initialGroup)
@@ -210,35 +219,67 @@ export function useInventoryState(options = {}) {
         setRefreshing(true)
       }
       setError('')
+      setEmptyMessage('')
 
       console.log('[fetchData] start for providerKey =', providerKey, 'opts =', fetchOptions)
 
       try {
         // 1. pedir datos al backend usando el fetcher actual
         const rawItems = await fetcher(fetchOptions)
+        if (rawItems?.empty) {
+          setVms([])
+          setLastFetchTs(Date.now())
+          setEmptyMessage('Esperando snapshot')
+          return []
+        }
 
         // 2. normalizar cada item
         console.log('RAW ITEMS', rawItems)
-        const normalized = rawItems.map((item) => {
-          const record = normalizeRecord(item);
+        const safeItems = Array.isArray(rawItems) ? rawItems : []
+        let dropped = 0
+        const normalized = []
 
-          const enriched = (
-            providerKey === 'hyperv'
-              ? {
-                  ...record,
-                  environment: inferEnvironmentForHyperV(record),
-                }
-              : record
-          );
+        for (const item of safeItems) {
+          if (!item || typeof item !== 'object') {
+            dropped += 1
+            continue
+          }
+          try {
+            const record = normalizeRecord(item)
+            if (!record || typeof record !== 'object') {
+              dropped += 1
+              continue
+            }
 
-          // ADJUNTAR LA VM CRUDA ORIGINAL
-          return {
-            ...enriched,
-            __raw: item,
-          };
-        })
+            const enriched = (
+              providerKey === 'hyperv'
+                ? {
+                    ...record,
+                    environment: inferEnvironmentForHyperV(record),
+                  }
+                : record
+            )
+
+            // ADJUNTAR LA VM CRUDA ORIGINAL
+            normalized.push({
+              ...enriched,
+              __raw: item,
+            })
+          } catch (recordError) {
+            console.warn('[fetchData] skip invalid record', recordError)
+            dropped += 1
+          }
+        }
         console.log('NORMALIZED', normalized.length, normalized[0])
         console.log('[fetchData] normalized.length =', normalized.length, 'providerKey =', providerKey)
+
+        if (dropped > 0) {
+          setError(
+            providerKey === 'hyperv'
+              ? 'Inventario parcial: algunos registros no se pudieron procesar. Se muestran las VMs disponibles.'
+              : 'Algunos registros no se pudieron procesar. Se muestran los datos disponibles.'
+          )
+        }
 
         // 3. actualizar estado con las VMs recibidas
         setVms(normalized)
@@ -249,7 +290,12 @@ export function useInventoryState(options = {}) {
         return normalized
       } catch (fetchError) {
         console.error('[fetchData] ERROR', fetchError)
-        setError(fetchError?.message || 'OcurriÃ¯Â¿Â½ un error al obtener las VMs.')
+        const rawMessage = fetchError?.message ? String(fetchError.message) : ''
+        if (providerKey === 'hyperv' && /Cannot read properties of null/i.test(rawMessage)) {
+          setError('Inventario parcial: se recibieron registros vacios de algunos hosts. Se muestran las VMs disponibles.')
+        } else {
+          setError(rawMessage || 'Ocurrio un error al obtener las VMs.')
+        }
         return null
       } finally {
         if (showLoading) {
@@ -594,6 +640,7 @@ export function useInventoryState(options = {}) {
     vms,
     loading,
     error,
+    emptyMessage,
     filter,
     sortBy,
     groupByOption,
